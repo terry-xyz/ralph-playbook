@@ -1675,14 +1675,17 @@
               manageable through observation and iteration.
             </p>
 
-            <h3>Enhanced Loop Code Example</h3>
+            <h3><code>loop.sh</code> Code</h3>
 
             <p>
-              Wraps core loop with mode selection (plan/build), max-iterations
-              support, and git push after each iteration.
+              Runs Claude in a loop with mode selection (plan/specs/build), max-iterations
+              support, git push after each iteration, and a <code>parse_stream.js</code>
+              helper that transforms Claude's raw JSON stream into readable,
+              color-coded terminal output showing tool calls, results, and
+              execution stats.
             </p>
 
-            <p><em>This enhancement uses two saved prompt files:</em></p>
+            <p><em>Uses saved prompt files per mode:</em></p>
             <ul>
               <li>
                 <code>PROMPT_plan.md</code> – Planning mode (gap analysis,
@@ -1692,10 +1695,14 @@
                 <code>PROMPT_build.md</code> – Building mode (implements from
                 plan)
               </li>
+              <li>
+                <code>PROMPT_specs.md</code> – Specs mode (generates/updates
+                specs)
+              </li>
             </ul>
 
             <details>
-              <summary>Enhanced `loop.sh` script</summary>
+              <summary><code>loop.sh</code> + <code>parse_stream.js</code></summary>
               <div class="details-content">
                 <div class="code-block">
                   <div class="code-block-header">
@@ -1705,12 +1712,14 @@
                     </button>
                   </div>
                   <pre><code><span class="token-comment">#!/bin/bash</span>
-<span class="token-comment"># Usage: ./loop.sh [plan] [max_iterations]</span>
+<span class="token-comment"># Usage: ./loop.sh [plan|specs] [max_iterations]</span>
 <span class="token-comment"># Examples:</span>
-<span class="token-comment">#   ./loop.sh              # Build mode, unlimited tasks</span>
-<span class="token-comment">#   ./loop.sh 20           # Build mode, max 20 tasks</span>
-<span class="token-comment">#   ./loop.sh plan         # Plan mode, unlimited tasks</span>
-<span class="token-comment">#   ./loop.sh plan 5       # Plan mode, max 5 tasks</span>
+<span class="token-comment">#   ./loop.sh              # Build mode, unlimited iterations</span>
+<span class="token-comment">#   ./loop.sh 20           # Build mode, max 20 iterations</span>
+<span class="token-comment">#   ./loop.sh plan         # Plan mode, unlimited iterations</span>
+<span class="token-comment">#   ./loop.sh plan 5       # Plan mode, max 5 iterations</span>
+<span class="token-comment">#   ./loop.sh specs        # Specs mode, unlimited iterations</span>
+<span class="token-comment">#   ./loop.sh specs 3      # Specs mode, max 3 iterations</span>
 
 <span class="token-comment"># Parse arguments</span>
 <span class="token-keyword">if</span> [ <span class="token-string">"$1"</span> = <span class="token-string">"plan"</span> ]; <span class="token-keyword">then</span>
@@ -1718,8 +1727,13 @@
     MODE=<span class="token-string">"plan"</span>
     PROMPT_FILE=<span class="token-string">"PROMPT_plan.md"</span>
     MAX_ITERATIONS=<span class="token-variable">${2:-0}</span>
+<span class="token-keyword">elif</span> [ <span class="token-string">"$1"</span> = <span class="token-string">"specs"</span> ]; <span class="token-keyword">then</span>
+    <span class="token-comment"># Specs mode</span>
+    MODE=<span class="token-string">"specs"</span>
+    PROMPT_FILE=<span class="token-string">"PROMPT_specs.md"</span>
+    MAX_ITERATIONS=<span class="token-variable">${2:-0}</span>
 <span class="token-keyword">elif</span> [[ <span class="token-string">"$1"</span> =~ ^[0-9]+$ ]]; <span class="token-keyword">then</span>
-    <span class="token-comment"># Build mode with max tasks</span>
+    <span class="token-comment"># Build mode with max iterations</span>
     MODE=<span class="token-string">"build"</span>
     PROMPT_FILE=<span class="token-string">"PROMPT_build.md"</span>
     MAX_ITERATIONS=$1
@@ -1753,17 +1767,32 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
     <span class="token-keyword">fi</span>
 
     <span class="token-comment"># Run Ralph iteration with selected prompt</span>
-    <span class="token-comment"># -p: Headless mode (non-interactive, reads from stdin)</span>
+    <span class="token-comment"># -p: Headless mode (non-interactive, prints output and exits)</span>
     <span class="token-comment"># --dangerously-skip-permissions: Auto-approve all tool calls (YOLO mode)</span>
-    <span class="token-comment"># --output-format=stream-json: Structured output for logging/monitoring</span>
-    <span class="token-comment"># --model opus: Primary agent uses Opus for complex reasoning (task selection, prioritization)</span>
-    <span class="token-comment">#               Can use 'sonnet' in build mode for speed if plan is clear and tasks well-defined</span>
+    <span class="token-comment"># --model opus: Primary agent uses Opus for complex reasoning</span>
+    <span class="token-comment">#               Can use 'sonnet' in build mode for speed if plan is clear</span>
     <span class="token-comment"># --verbose: Detailed execution logging</span>
-    <span class="token-function">cat</span> <span class="token-string">"$PROMPT_FILE"</span> | claude -p \
+    <span class="token-comment"># --output-format stream-json: Structured output piped to parse_stream.js</span>
+    <span class="token-comment"># --include-partial-messages: Stream partial tool results for live feedback</span>
+
+    FULL_PROMPT=<span class="token-string">"$(cat "$PROMPT_FILE")
+
+Execute the instructions above."</span>
+
+    <span class="token-function">echo</span> <span class="token-string">"⏳ Running Claude..."</span>
+    <span class="token-function">echo</span> <span class="token-string">""</span>
+
+    <span class="token-comment"># Stream JSON with partial messages, parse for readable output</span>
+    SCRIPT_DIR=<span class="token-string">"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"</span>
+    claude -p <span class="token-string">"$FULL_PROMPT"</span> \
         --dangerously-skip-permissions \
-        --output-format=stream-json \
         --model opus \
-        --verbose
+        --verbose \
+        --output-format stream-json \
+        --include-partial-messages 2>&1 | node <span class="token-string">"$SCRIPT_DIR/parse_stream.js"</span>
+
+    <span class="token-function">echo</span> <span class="token-string">""</span>
+    <span class="token-function">echo</span> <span class="token-string">"✅ Claude iteration complete"</span>
 
     <span class="token-comment"># Push changes after each iteration</span>
     <span class="token-function">git push</span> origin <span class="token-string">"$CURRENT_BRANCH"</span> || {
@@ -1775,6 +1804,18 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
     <span class="token-function">echo</span> -e <span class="token-string">"\n\n======================== LOOP $ITERATION ========================\n"</span>
 <span class="token-keyword">done</span></code></pre>
                 </div>
+
+                <p style="margin-top: var(--space-lg)">
+                  <strong><code>parse_stream.js</code></strong> – Node.js script
+                  (no external dependencies) that parses Claude's
+                  <code>stream-json</code> output into readable, color-coded
+                  terminal output. Displays tool calls with parameters, results
+                  (truncated), errors, and a summary line with duration, cost,
+                  token usage, and tool call count. See
+                  <a href="https://github.com/ClaytonFarr/ralph-playbook/blob/main/parse_stream.js"
+                    >parse_stream.js source</a
+                  >.
+                </p>
               </div>
             </details>
 
@@ -1787,6 +1828,10 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
               <li>
                 <code>plan</code> keyword → Uses <code>PROMPT_plan.md</code> for
                 planning (gap analysis, plan generation)
+              </li>
+              <li>
+                <code>specs</code> keyword → Uses <code>PROMPT_specs.md</code>
+                for specs (generates/updates specs)
               </li>
             </ul>
 
@@ -1812,15 +1857,20 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
             <ul>
               <li>
                 <code>-p</code> (headless mode): Enables non-interactive
-                operation, reads prompt from stdin
+                operation, reads prompt as argument
               </li>
               <li>
                 <code>--dangerously-skip-permissions</code>: Bypasses all
                 permission prompts for fully automated runs
               </li>
               <li>
-                <code>--output-format=stream-json</code>: Outputs structured
-                JSON for logging/monitoring/visualization
+                <code>--output-format stream-json</code>: Outputs structured
+                JSON, piped to <code>parse_stream.js</code> for readable
+                display
+              </li>
+              <li>
+                <code>--include-partial-messages</code>: Streams partial tool
+                results so <code>parse_stream.js</code> can show live progress
               </li>
               <li>
                 <code>--model opus</code>: Primary agent uses Opus for task
@@ -1852,8 +1902,10 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
               </div>
               <pre><code>project-root/
 ├── loop.sh                         <span class="token-comment"># Ralph loop script</span>
+├── parse_stream.js                 <span class="token-comment"># Stream output parser for readable display</span>
 ├── PROMPT_build.md                 <span class="token-comment"># Build mode instructions</span>
 ├── PROMPT_plan.md                  <span class="token-comment"># Plan mode instructions</span>
+├── PROMPT_specs.md                 <span class="token-comment"># Specs mode instructions</span>
 ├── AGENTS.md                       <span class="token-comment"># Operational guide loaded each iteration</span>
 ├── IMPLEMENTATION_PLAN.md          <span class="token-comment"># Prioritized task list (generated/updated by Ralph)</span>
 ├── specs/                          <span class="token-comment"># Requirement specs (one per JTBD topic)</span>
@@ -1877,6 +1929,11 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
                   <tr>
                     <td><code>loop.sh</code></td>
                     <td>Task selection loop orchestration</td>
+                    <td>You (setup)</td>
+                  </tr>
+                  <tr>
+                    <td><code>parse_stream.js</code></td>
+                    <td>Stream output parser for readable display</td>
                     <td>You (setup)</td>
                   </tr>
                   <tr>
@@ -1921,7 +1978,20 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
             <p>
               <em>Core function:</em> Continuously feeds prompt file to claude,
               manages iteration limits, and pushes changes after each task
-              completion.
+              completion. Output is piped through
+              <code>parse_stream.js</code> for readable display.
+            </p>
+
+            <h3><code>parse_stream.js</code></h3>
+            <p>
+              Node.js script that parses Claude's <code>stream-json</code>
+              output into readable, color-coded terminal output. Displays tool
+              calls with parameters, results (truncated), errors, and a summary
+              line with duration, cost, token usage, and tool call count.
+            </p>
+            <p>
+              <em>Requires:</em> Node.js installed. No external dependencies
+              (uses only built-in <code>readline</code> module).
             </p>
 
             <h3>PROMPTS</h3>
@@ -2039,6 +2109,83 @@ ULTIMATE GOAL: We want to achieve [project-specific goal]. Consider missing elem
 9999999999999. When @IMPLEMENTATION_PLAN.md becomes large periodically clean out the items that are completed from the file using a subagent.
 99999999999999. If you find inconsistencies in the specs/* then use an Opus 4.5 subagent with 'ultrathink' requested to update the specs.
 999999999999999. IMPORTANT: Keep @AGENTS.md operational only – status updates and progress notes belong in `IMPLEMENTATION_PLAN.md`. A bloated AGENTS.md pollutes every future loop's context.</code></pre>
+                </div>
+              </div>
+            </details>
+
+            <details>
+              <summary>
+                <span class="summary-title">PROMPT_specs.md Template</span>
+                <span class="summary-desc"
+                  >Iterates over specs files to enforce quality rules:
+                  behavioral outcomes only, proper topic scoping, consistent
+                  naming.</span
+                >
+              </summary>
+              <div class="details-content">
+                <p>
+                  Iterates over existing specs files and ensures they comply
+                  with quality rules: behavioral outcomes only (no
+                  implementation details), proper topic scoping ("one sentence
+                  without 'and'"), and consistent file naming. Creates new spec
+                  files when needed based on
+                  <code>specs/README.md</code>.
+                </p>
+
+                <p>
+                  <em>Notes:</em>
+                </p>
+                <ul>
+                  <li>
+                    This mode is for spec hygiene – run it after writing or
+                    updating specs to enforce consistency.
+                  </li>
+                  <li>
+                    Specs define WHAT to verify (outcomes), not HOW to implement
+                    (approach). Implementation decisions are left to Ralph
+                    during the build phase.
+                  </li>
+                </ul>
+
+                <div class="code-block">
+                  <div class="code-block-header">
+                    <span>PROMPT_specs.md</span>
+                    <button class="copy-btn" onclick="copyCode(this)">
+                      Copy
+                    </button>
+                  </div>
+                  <pre><code>0a. Study `specs/*` with up to 250 parallel Sonnet subagents to learn the application specifications.
+
+1. Identify Jobs to Be Done (JTBD) → Break individual JTBD into topic(s) of concern → Use subagents to load info from URLs into context → LLM understands JTBD topic of concern: subagent writes specs/FILENAME.md for each topic.
+
+## RULES (dont apply to `specs/README.md`)
+
+999. NEVER add code blocks or suggest how a variable should be named. This will be decided by Ralph.
+
+9999.
+- Acceptance criteria (in specs) = Behavioral outcomes, observable results
+for example:
+✓ "Extracts 5-10 dominant colors from any uploaded image"
+✓ "Processes images &lt;5MB in &lt;100ms"
+✓ "Handles edge cases: grayscale, single-color, transparent backgrounds"
+- Test requirements (in plan) = Verification points derived from acceptance criteria
+for example:
+✓ "Required tests: Extract 5-10 colors, Performance &lt;100ms"
+- Implementation approach (up to Ralph) = Technical decisions
+example TO AVOID:
+✗ "Use K-means clustering with 3 iterations"
+
+99999. Topic Scope Test: "One Sentence Without 'And'"
+Can you describe the topic of concern in one sentence without conjoining unrelated capabilities?
+example to follow:
+✓ "The color extraction system analyzes images to identify dominant colors"
+example to avoid:
+✗ "The user system handles authentication, profiles, and billing" → 3 topics
+If you need "and" to describe what it does, it's probably multiple topics
+
+99999999. The key: Specify WHAT to verify (outcomes), not HOW to implement (approach). This maintains "Let Ralph Ralph" principle - Ralph decides implementation details while having clear success signals.
+
+99999999999. Apply all rules to all existing files with up to 100 parallel Sonnet subagents in @specs (except README.md) and create new files if determined its needed based on `specs/README.md`. The names of the files should follow this name convention: &lt;int&gt;-filename.md, for example 01-range-optimization.md, 02-adaptive-behavior.md etc.</code></pre>
                 </div>
               </div>
             </details>
@@ -2923,7 +3070,7 @@ test("brand visual consistency", async () =&gt; {
 
                 <h5>Work-Scoped <code>loop.sh</code></h5>
                 <p>
-                  Extends the base enhanced loop script to add work branch
+                  Extends <code>loop.sh</code> to add work branch
                   support with scoped planning:
                 </p>
                 <div class="code-block">
@@ -2935,8 +3082,8 @@ test("brand visual consistency", async () =&gt; {
 set -euo pipefail
 
 # Usage:
-#   ./loop.sh [plan] [max_iterations]       # Plan/build on current branch
-#   ./loop.sh plan-work "work description"  # Create scoped plan on current branch
+#   ./loop.sh [plan|specs] [max_iterations]  # Plan/specs/build on current branch
+#   ./loop.sh plan-work "work description"   # Create scoped plan on current branch
 
 # Parse arguments
 MODE="build"
@@ -2945,6 +3092,10 @@ PROMPT_FILE="PROMPT_build.md"
 if [ "$1" = "plan" ]; then
     MODE="plan"
     PROMPT_FILE="PROMPT_plan.md"
+    MAX_ITERATIONS=${2:-0}
+elif [ "$1" = "specs" ]; then
+    MODE="specs"
+    PROMPT_FILE="PROMPT_specs.md"
     MAX_ITERATIONS=${2:-0}
 elif [ "$1" = "plan-work" ]; then
     if [ -z "$2" ]; then
@@ -2961,7 +3112,8 @@ else
     MAX_ITERATIONS=0
 fi
 
-# ... (see README for full script)</code></pre>
+# ... (see README for full script)
+# Output is piped through parse_stream.js for readable display</code></pre>
                 </div>
 
                 <h5><code>PROMPT_plan_work.md</code> Template</h5>

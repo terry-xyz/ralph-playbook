@@ -57,9 +57,6 @@ while true; do
     # -p: Headless mode (non-interactive, prints output and exits)
     # --dangerously-skip-permissions: Auto-approve all tool calls (YOLO mode)
     # --model opus: Primary agent uses Opus for complex reasoning
-    # --verbose: Detailed execution logging
-    # --output-format stream-json: Structured output piped to parse_stream.js
-    # --include-partial-messages: Stream partial tool results for live feedback
 
     FULL_PROMPT="$(cat "$PROMPT_FILE")
 

@@ -260,23 +260,26 @@ A single task execution has no hard technical limit. Control relies on:
 
 _Ralph can go in circles, ignore instructions, or take wrong directions_ - this is expected and part of the tuning process. When Ralph "tests you" by failing in specific ways, you add guardrails to the prompt or adjust backpressure mechanisms. The nondeterminism is manageable through observation and iteration.
 
-### Enhanced `loop.sh` Example
+### `loop.sh` Code
 
-Wraps core loop with mode selection (plan/build), with max-iterations for max number of tasks to complete, and git push after each iteration.
+Runs Claude in a loop with mode selection (plan/specs/build), max-iterations support, git push after each iteration, and a `parse_stream.js` helper that transforms Claude's raw JSON stream into readable, color-coded terminal output showing tool calls, results, and execution stats.
 
-_This enhancement uses two saved prompt files:_
+_Uses saved prompt files per mode:_
 
 - `PROMPT_plan.md` - Planning mode (gap analysis, generates/updates plan)
 - `PROMPT_build.md` - Building mode (implements from plan)
+- `PROMPT_specs.md` - Specs mode (generates/updates specs)
 
 ```bash
 #!/bin/bash
-# Usage: ./loop.sh [plan] [max_iterations]
+# Usage: ./loop.sh [plan|specs] [max_iterations]
 # Examples:
-#   ./loop.sh              # Build mode, unlimited tasks
-#   ./loop.sh 20           # Build mode, max 20 tasks
-#   ./loop.sh plan         # Plan mode, unlimited tasks
-#   ./loop.sh plan 5       # Plan mode, max 5 tasks
+#   ./loop.sh              # Build mode, unlimited iterations
+#   ./loop.sh 20           # Build mode, max 20 iterations
+#   ./loop.sh plan         # Plan mode, unlimited iterations
+#   ./loop.sh plan 5       # Plan mode, max 5 iterations
+#   ./loop.sh specs        # Specs mode, unlimited iterations
+#   ./loop.sh specs 3      # Specs mode, max 3 iterations
 
 # Parse arguments
 if [ "$1" = "plan" ]; then
@@ -284,8 +287,13 @@ if [ "$1" = "plan" ]; then
     MODE="plan"
     PROMPT_FILE="PROMPT_plan.md"
     MAX_ITERATIONS=${2:-0}
+elif [ "$1" = "specs" ]; then
+    # Specs mode
+    MODE="specs"
+    PROMPT_FILE="PROMPT_specs.md"
+    MAX_ITERATIONS=${2:-0}
 elif [[ "$1" =~ ^[0-9]+$ ]]; then
-    # Build mode with max tasks
+    # Build mode with max iterations
     MODE="build"
     PROMPT_FILE="PROMPT_build.md"
     MAX_ITERATIONS=$1
@@ -303,7 +311,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Mode:   $MODE"
 echo "Prompt: $PROMPT_FILE"
 echo "Branch: $CURRENT_BRANCH"
-[ $MAX_ITERATIONS -gt 0 ] && echo "Max:    $MAX_ITERATIONS iterations (number of tasks)"
+[ $MAX_ITERATIONS -gt 0 ] && echo "Max:    $MAX_ITERATIONS iterations"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Verify prompt file exists
@@ -314,22 +322,37 @@ fi
 
 while true; do
     if [ $MAX_ITERATIONS -gt 0 ] && [ $ITERATION -ge $MAX_ITERATIONS ]; then
-        echo "Reached max iterations (number of tasks): $MAX_ITERATIONS"
+        echo "Reached max iterations: $MAX_ITERATIONS"
         break
     fi
 
     # Run Ralph iteration with selected prompt
-    # -p: Headless mode (non-interactive, reads from stdin)
+    # -p: Headless mode (non-interactive, prints output and exits)
     # --dangerously-skip-permissions: Auto-approve all tool calls (YOLO mode)
-    # --output-format=stream-json: Structured output for logging/monitoring
-    # --model opus: Primary agent uses Opus for complex reasoning (task selection, prioritization)
+    # --model opus: Primary agent uses Opus for complex reasoning
     #               Can use 'sonnet' in build mode for speed if plan is clear and tasks well-defined
     # --verbose: Detailed execution logging
-    cat "$PROMPT_FILE" | claude -p \
+    # --output-format stream-json: Structured output piped to parse_stream.js
+    # --include-partial-messages: Stream partial tool results for live feedback
+
+    FULL_PROMPT="$(cat "$PROMPT_FILE")
+
+Execute the instructions above."
+
+    echo "⏳ Running Claude..."
+    echo ""
+
+    # Stream JSON with partial messages, parse for readable output
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    claude -p "$FULL_PROMPT" \
         --dangerously-skip-permissions \
-        --output-format=stream-json \
         --model opus \
-        --verbose
+        --verbose \
+        --output-format stream-json \
+        --include-partial-messages 2>&1 | node "$SCRIPT_DIR/parse_stream.js"
+
+    echo ""
+    echo "✅ Claude iteration complete"
 
     # Push changes after each iteration
     git push origin "$CURRENT_BRANCH" || {
@@ -346,6 +369,7 @@ _Mode selection:_
 
 - No keyword → Uses `PROMPT_build.md` for building (implementation)
 - `plan` keyword → Uses `PROMPT_plan.md` for planning (gap analysis, plan generation)
+- `specs` keyword → Uses `PROMPT_specs.md` for specs (generates/updates specs)
 
 _Max-iterations:_
 
@@ -356,11 +380,16 @@ _Max-iterations:_
 
 _Claude CLI flags:_
 
-- `-p` (headless mode): Enables non-interactive operation, reads prompt from stdin
+- `-p` (headless mode): Enables non-interactive operation, reads prompt as argument
 - `--dangerously-skip-permissions`: Bypasses all permission prompts for fully automated runs
-- `--output-format=stream-json`: Outputs structured JSON for logging/monitoring/visualization
+- `--output-format stream-json`: Outputs structured JSON, piped to `parse_stream.js` for readable display
+- `--include-partial-messages`: Streams partial tool results so `parse_stream.js` can show live progress
 - `--model opus`: Primary agent uses Opus for task selection, prioritization, and coordination (can use `sonnet` for speed if tasks are clear)
 - `--verbose`: Provides detailed execution logging
+
+_Stream output parsing (`parse_stream.js`):_
+
+The raw `stream-json` output from Claude is piped through `parse_stream.js`, a Node.js script that transforms it into readable, color-coded terminal output. It displays tool calls with their parameters (file reads, writes, bash commands, etc.), tool results (truncated for readability), and a summary line with duration, cost, token usage, and tool call count at the end of each iteration.
 
 ---
 
@@ -369,8 +398,10 @@ _Claude CLI flags:_
 ```
 project-root/
 ├── loop.sh                         # Ralph loop script
+├── parse_stream.js                 # Stream output parser for readable display
 ├── PROMPT_build.md                 # Build mode instructions
 ├── PROMPT_plan.md                  # Plan mode instructions
+├── PROMPT_specs.md                 # Specs mode instructions
 ├── AGENTS.md                       # Operational guide loaded each iteration
 ├── IMPLEMENTATION_PLAN.md          # Prioritized task list (generated/updated by Ralph)
 ├── specs/                          # Requirement specs (one per JTBD topic)
@@ -392,7 +423,13 @@ _Setup:_ Make the script executable before first use:
 chmod +x loop.sh
 ```
 
-_Core function:_ Continuously feeds prompt file to claude, manages iteration limits, and pushes changes after each task completion.
+_Core function:_ Continuously feeds prompt file to claude, manages iteration limits, and pushes changes after each task completion. Output is piped through `parse_stream.js` for readable display.
+
+### `parse_stream.js`
+
+Node.js script that parses Claude's `stream-json` output into readable, color-coded terminal output. Displays tool calls with parameters, results (truncated), errors, and a summary line with duration, cost, token usage, and tool call count.
+
+_Requires:_ Node.js installed. No external dependencies (uses only built-in `readline` module).
 
 ### PROMPTS
 
@@ -463,6 +500,50 @@ _Note:_ Current subagents names presume using Claude.
 9999999999999. When @IMPLEMENTATION_PLAN.md becomes large periodically clean out the items that are completed from the file using a subagent.
 99999999999999. If you find inconsistencies in the specs/* then use an Opus 4.5 subagent with 'ultrathink' requested to update the specs.
 999999999999999. IMPORTANT: Keep @AGENTS.md operational only — status updates and progress notes belong in `IMPLEMENTATION_PLAN.md`. A bloated AGENTS.md pollutes every future loop's context.
+```
+
+#### `PROMPT_specs.md` Template
+
+Iterates over existing specs files and ensures they comply with quality rules: behavioral outcomes only (no implementation details), proper topic scoping ("one sentence without 'and'"), and consistent file naming. Creates new spec files when needed based on `specs/README.md`.
+
+_Notes:_
+
+- This mode is for spec hygiene — run it after writing or updating specs to enforce consistency.
+- Specs define WHAT to verify (outcomes), not HOW to implement (approach). Implementation decisions are left to Ralph during the build phase.
+
+```
+0a. Study `specs/*` with up to 250 parallel Sonnet subagents to learn the application specifications.
+
+1. Identify Jobs to Be Done (JTBD) → Break individual JTBD into topic(s) of concern → Use subagents to load info from URLs into context → LLM understands JTBD topic of concern: subagent writes specs/FILENAME.md for each topic.
+
+## RULES (dont apply to `specs/README.md`)
+
+999. NEVER add code blocks or suggest how a variable should be named. This will be decided by Ralph.
+
+9999.
+- Acceptance criteria (in specs) = Behavioral outcomes, observable results
+for example:
+✓ "Extracts 5-10 dominant colors from any uploaded image"
+✓ "Processes images <5MB in <100ms"
+✓ "Handles edge cases: grayscale, single-color, transparent backgrounds"
+- Test requirements (in plan) = Verification points derived from acceptance criteria
+for example:
+✓ "Required tests: Extract 5-10 colors, Performance <100ms"
+- Implementation approach (up to Ralph) = Technical decisions
+example TO AVOID:
+✗ "Use K-means clustering with 3 iterations"
+
+99999. Topic Scope Test: "One Sentence Without 'And'"
+Can you describe the topic of concern in one sentence without conjoining unrelated capabilities?
+example to follow:
+✓ "The color extraction system analyzes images to identify dominant colors"
+example to avoid:
+✗ "The user system handles authentication, profiles, and billing" → 3 topics
+If you need "and" to describe what it does, it's probably multiple topics
+
+99999999. The key: Specify WHAT to verify (outcomes), not HOW to implement (approach). This maintains "Let Ralph Ralph" principle - Ralph decides implementation details while having clear success signals.
+
+99999999999. Apply all rules to all existing files with up to 100 parallel Sonnet subagents in @specs (except README.md) and create new files if determined its needed based on `specs/README.md`. The names of the files should follow this name convention: <int>-filename.md, for example 01-range-optimization.md, 02-adaptive-behavior.md etc.
 ```
 
 ### `AGENTS.md`
@@ -891,20 +972,21 @@ gh pr create --base main --head ralph/user-auth-oauth --fill
 
 #### Work-Scoped Loop Script
 
-Extends the base enhanced loop script to add work branch support with scoped planning:
+Extends `loop.sh` to add work branch support with scoped planning:
 
 ```bash
 #!/bin/bash
 set -euo pipefail
 
 # Usage:
-#   ./loop.sh [plan] [max_iterations]       # Plan/build on current branch
-#   ./loop.sh plan-work "work description"  # Create scoped plan on current branch
+#   ./loop.sh [plan|specs] [max_iterations]  # Plan/specs/build on current branch
+#   ./loop.sh plan-work "work description"   # Create scoped plan on current branch
 # Examples:
-#   ./loop.sh                               # Build mode, unlimited
-#   ./loop.sh 20                            # Build mode, max 20
-#   ./loop.sh plan 5                        # Full planning, max 5
-#   ./loop.sh plan-work "user auth"         # Scoped planning
+#   ./loop.sh                                # Build mode, unlimited
+#   ./loop.sh 20                             # Build mode, max 20
+#   ./loop.sh plan 5                         # Full planning, max 5
+#   ./loop.sh specs                          # Specs mode, unlimited
+#   ./loop.sh plan-work "user auth"          # Scoped planning
 
 # Parse arguments
 MODE="build"
@@ -914,6 +996,11 @@ if [ "$1" = "plan" ]; then
     # Full planning mode
     MODE="plan"
     PROMPT_FILE="PROMPT_plan.md"
+    MAX_ITERATIONS=${2:-0}
+elif [ "$1" = "specs" ]; then
+    # Specs mode
+    MODE="specs"
+    PROMPT_FILE="PROMPT_specs.md"
     MAX_ITERATIONS=${2:-0}
 elif [ "$1" = "plan-work" ]; then
     # Scoped planning mode
@@ -965,7 +1052,7 @@ if [ "$MODE" = "plan-work" ]; then
     # Export work description for PROMPT_plan_work.md
     export WORK_SCOPE="$WORK_DESCRIPTION"
 else
-    # Normal plan/build mode
+    # Normal plan/specs/build mode
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Mode:   $MODE"
     echo "Branch: $CURRENT_BRANCH"
@@ -997,28 +1084,31 @@ while true; do
         break
     fi
 
-    # Run Ralph iteration with selected prompt
-    # -p: Headless mode (non-interactive, reads from stdin)
-    # --dangerously-skip-permissions: Auto-approve all tool calls (YOLO mode)
-    # --output-format=stream-json: Structured output for logging/monitoring
-    # --model opus: Primary agent uses Opus for complex reasoning (task selection, prioritization)
-    #               Can use 'sonnet' for speed if plan is clear and tasks well-defined
-    # --verbose: Detailed execution logging
-
-    # For plan-work mode, substitute ${WORK_SCOPE} in prompt before piping
+    # For plan-work mode, substitute ${WORK_SCOPE} in prompt
     if [ "$MODE" = "plan-work" ]; then
-        envsubst < "$PROMPT_FILE" | claude -p \
-            --dangerously-skip-permissions \
-            --output-format=stream-json \
-            --model opus \
-            --verbose
+        FULL_PROMPT="$(envsubst < "$PROMPT_FILE")
+
+Execute the instructions above."
     else
-        cat "$PROMPT_FILE" | claude -p \
-            --dangerously-skip-permissions \
-            --output-format=stream-json \
-            --model opus \
-            --verbose
+        FULL_PROMPT="$(cat "$PROMPT_FILE")
+
+Execute the instructions above."
     fi
+
+    echo "⏳ Running Claude..."
+    echo ""
+
+    # Stream JSON with partial messages, parse for readable output
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    claude -p "$FULL_PROMPT" \
+        --dangerously-skip-permissions \
+        --model opus \
+        --verbose \
+        --output-format stream-json \
+        --include-partial-messages 2>&1 | node "$SCRIPT_DIR/parse_stream.js"
+
+    echo ""
+    echo "✅ Claude iteration complete"
 
     # Push to current branch
     CURRENT_BRANCH=$(git branch --show-current)
