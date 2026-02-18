@@ -1831,6 +1831,52 @@ CURRENT_BRANCH=$(<span class="token-function">git branch --show-current</span>)
                 <code>--verbose</code>: Provides detailed execution logging
               </li>
             </ul>
+
+            <h3>Streamed Output Variant</h3>
+
+            <p>
+              An alternative <code>loop_streamed.sh</code> that pipes Claude's
+              raw JSON output through <code>parse_stream.js</code> for readable,
+              color-coded terminal display showing tool calls, results, and
+              execution stats.
+            </p>
+
+            <p><em>Differences from base <code>loop.sh</code>:</em></p>
+            <ul>
+              <li>
+                Passes prompt as argument (<code>-p "$FULL_PROMPT"</code>)
+                instead of stdin pipe
+              </li>
+              <li>
+                Adds <code>--include-partial-messages</code> for real-time
+                streaming
+              </li>
+              <li>
+                Pipes output through <code>parse_stream.js</code> (Node.js, no
+                dependencies)
+              </li>
+              <li>
+                Appends "Execute the instructions above." to prompt content
+              </li>
+            </ul>
+
+            <p>
+              <em>Files:</em>
+              <a href="files/loop_streamed.sh"
+                ><code>loop_streamed.sh</code></a
+              >
+              &middot;
+              <a href="files/parse_stream.js"
+                ><code>parse_stream.js</code></a
+              >
+            </p>
+
+            <p>
+              — contributed by
+              <a href="https://github.com/terry-xyz">@terry-xyz</a>
+              &middot;
+              <a href="https://x.com/blackrosesxyz">@blackrosesxyz</a>
+            </p>
           </section>
 
           <hr />
@@ -3438,6 +3484,171 @@ ULTIMATE GOAL: We want to achieve the most valuable next release for the audienc
                     serves both "capture" and "gather inspiration")
                   </li>
                 </ul>
+              </div>
+            </details>
+
+            <details>
+              <summary>
+                <span class="summary-title">Specs Mode</span>
+                <span class="summary-desc"
+                  >Dedicated mode for generating/maintaining specs with quality
+                  rules: behavioral outcomes only, topic scoping, consistent
+                  naming.</span
+                >
+              </summary>
+              <div class="details-content">
+                <p>
+                  A dedicated loop mode for generating and maintaining spec
+                  files with enforced quality rules. Ensures specs stay focused
+                  on behavioral outcomes (not implementation details), properly
+                  scoped topics ("one sentence without 'and'"), and consistent
+                  file naming conventions.
+                </p>
+
+                <p>
+                  <em>When to use:</em> After writing or updating specs, run
+                  specs mode to enforce consistency and hygiene across all spec
+                  files.
+                </p>
+
+                <p><em>What it does:</em></p>
+                <ul>
+                  <li>
+                    Iterates over existing <code>specs/*</code> files
+                  </li>
+                  <li>
+                    Enforces quality rules: behavioral outcomes only, no code
+                    blocks, no implementation details
+                  </li>
+                  <li>
+                    Validates topic scoping using the "One Sentence Without
+                    'And'" test
+                  </li>
+                  <li>
+                    Creates new spec files when needed based on
+                    <code>specs/README.md</code>
+                  </li>
+                  <li>
+                    Applies consistent file naming:
+                    <code>&lt;int&gt;-filename.md</code> (e.g.,
+                    <code>01-range-optimization.md</code>)
+                  </li>
+                </ul>
+
+                <p>
+                  <em>Usage:</em> Add a <code>specs</code> argument to your
+                  loop script that selects <code>PROMPT_specs.md</code>:
+                </p>
+                <div class="code-block">
+                  <div class="code-block-header">
+                    <span>bash</span>
+                    <button class="copy-btn" onclick="copyCode(this)">
+                      Copy
+                    </button>
+                  </div>
+                  <pre><code>./loop.sh specs        # Specs mode, unlimited iterations
+./loop.sh specs 3      # Specs mode, max 3 iterations</code></pre>
+                </div>
+
+                <p>
+                  <em>To add specs mode to <code>loop.sh</code>:</em> insert a
+                  new <code>elif</code> branch in the argument parsing:
+                </p>
+                <div class="code-block">
+                  <div class="code-block-header">
+                    <span>bash</span>
+                    <button class="copy-btn" onclick="copyCode(this)">
+                      Copy
+                    </button>
+                  </div>
+                  <pre><code><span class="token-comment"># Parse arguments</span>
+<span class="token-keyword">if</span> [ <span class="token-string">"$1"</span> = <span class="token-string">"plan"</span> ]; <span class="token-keyword">then</span>
+    <span class="token-comment"># Plan mode</span>
+    MODE=<span class="token-string">"plan"</span>
+    PROMPT_FILE=<span class="token-string">"PROMPT_plan.md"</span>
+    MAX_ITERATIONS=<span class="token-variable">${2:-0}</span>
+<span class="token-keyword">elif</span> [ <span class="token-string">"$1"</span> = <span class="token-string">"specs"</span> ]; <span class="token-keyword">then</span>        <span class="token-comment"># ← add this block</span>
+    <span class="token-comment"># Specs mode</span>
+    MODE=<span class="token-string">"specs"</span>
+    PROMPT_FILE=<span class="token-string">"PROMPT_specs.md"</span>
+    MAX_ITERATIONS=<span class="token-variable">${2:-0}</span>
+<span class="token-keyword">elif</span> [[ <span class="token-string">"$1"</span> =~ ^[0-9]+$ ]]; <span class="token-keyword">then</span>
+    <span class="token-comment"># Build mode with max iterations</span>
+    ...</code></pre>
+                </div>
+
+                <p>
+                  <em>To add specs mode to <code>loop_streamed.sh</code>:</em>
+                  same change — add the <code>elif</code> block in the same
+                  position. The rest of the script (streaming,
+                  <code>parse_stream.js</code> piping) works unchanged.
+                </p>
+
+                <p>
+                  <em>Files:</em>
+                  <a href="files/PROMPT_specs.md"
+                    ><code>PROMPT_specs.md</code></a
+                  >
+                </p>
+
+                <h5><code>PROMPT_specs.md</code> Template</h5>
+
+                <p><em>Notes:</em></p>
+                <ul>
+                  <li>
+                    Specs define WHAT to verify (outcomes), not HOW to implement
+                    (approach). Implementation decisions are left to Ralph
+                    during the build phase.
+                  </li>
+                </ul>
+
+                <div class="code-block">
+                  <div class="code-block-header">
+                    <span>PROMPT_specs.md</span>
+                    <button class="copy-btn" onclick="copyCode(this)">
+                      Copy
+                    </button>
+                  </div>
+                  <pre><code>0a. Study `specs/*` with up to 250 parallel Sonnet subagents to learn the application specifications.
+
+1. Identify Jobs to Be Done (JTBD) → Break individual JTBD into topic(s) of concern → Use subagents to load info from URLs into context → LLM understands JTBD topic of concern: subagent writes specs/FILENAME.md for each topic.
+
+## RULES (dont apply to `specs/README.md`)
+
+999. NEVER add code blocks or suggest how a variable should be named. This will be decided by Ralph.
+
+9999.
+- Acceptance criteria (in specs) = Behavioral outcomes, observable results
+for example:
+✓ "Extracts 5-10 dominant colors from any uploaded image"
+✓ "Processes images &lt;5MB in &lt;100ms"
+✓ "Handles edge cases: grayscale, single-color, transparent backgrounds"
+- Test requirements (in plan) = Verification points derived from acceptance criteria
+for example:
+✓ "Required tests: Extract 5-10 colors, Performance &lt;100ms"
+- Implementation approach (up to Ralph) = Technical decisions
+example TO AVOID:
+✗ "Use K-means clustering with 3 iterations"
+
+99999. Topic Scope Test: "One Sentence Without 'And'"
+Can you describe the topic of concern in one sentence without conjoining unrelated capabilities?
+example to follow:
+✓ "The color extraction system analyzes images to identify dominant colors"
+example to avoid:
+✗ "The user system handles authentication, profiles, and billing" → 3 topics
+If you need "and" to describe what it does, it's probably multiple topics
+
+99999999. The key: Specify WHAT to verify (outcomes), not HOW to implement (approach). This maintains "Let Ralph Ralph" principle - Ralph decides implementation details while having clear success signals.
+
+99999999999. Apply all rules to all existing files with up to 100 parallel Sonnet subagents in @specs (except README.md) and create new files if determined its needed based on `specs/README.md`. The names of the files should follow this name convention: &lt;int&gt;-filename.md, for example 01-range-optimization.md, 02-adaptive-behavior.md etc.</code></pre>
+                </div>
+
+                <p>
+                  — contributed by
+                  <a href="https://github.com/terry-xyz">@terry-xyz</a>
+                  &middot;
+                  <a href="https://x.com/blackrosesxyz">@blackrosesxyz</a>
+                </p>
               </div>
             </details>
           </section>

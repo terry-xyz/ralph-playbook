@@ -1271,12 +1271,33 @@ _What it does:_
 - Creates new spec files when needed based on `specs/README.md`
 - Applies consistent file naming: `<int>-filename.md` (e.g., `01-range-optimization.md`)
 
-_Usage:_ Requires adding specs mode to `loop.sh` — add a `specs` argument that selects `PROMPT_specs.md`:
+_Usage:_ Add a `specs` argument to your loop script that selects `PROMPT_specs.md`:
 
 ```bash
 ./loop.sh specs        # Specs mode, unlimited iterations
 ./loop.sh specs 3      # Specs mode, max 3 iterations
 ```
+
+_To add specs mode to `loop.sh`:_ insert a new `elif` branch in the argument parsing:
+
+```bash
+# Parse arguments
+if [ "$1" = "plan" ]; then
+    # Plan mode
+    MODE="plan"
+    PROMPT_FILE="PROMPT_plan.md"
+    MAX_ITERATIONS=${2:-0}
+elif [ "$1" = "specs" ]; then        # ← add this block
+    # Specs mode
+    MODE="specs"
+    PROMPT_FILE="PROMPT_specs.md"
+    MAX_ITERATIONS=${2:-0}
+elif [[ "$1" =~ ^[0-9]+$ ]]; then
+    # Build mode with max iterations
+    ...
+```
+
+_To add specs mode to `loop_streamed.sh`:_ same change — add the `elif` block in the same position. The rest of the script (streaming, `parse_stream.js` piping) works unchanged.
 
 _Files:_ [`PROMPT_specs.md`](files/PROMPT_specs.md)
 
