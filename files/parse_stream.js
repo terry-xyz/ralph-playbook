@@ -278,6 +278,6 @@ rl.on('line', (line) => {
       // console.log(`${colors.dim}Debug result keys: ${Object.keys(data).join(', ')}${colors.reset}`);
     }
   } catch (e) {
-    // Ignore parse errors for non-JSON lines
+    if (line.trim()) process.stderr.write(line + '\n');
   }
 });

@@ -2,7 +2,7 @@
 
 1. Identify Jobs to Be Done (JTBD) → Break individual JTBD into topic(s) of concern → Use subagents to load info from URLs into context → LLM understands JTBD topic of concern: subagent writes specs/FILENAME.md for each topic.
 
-## RULES (dont apply to `specs/README.md`)
+## RULES (don't apply to `specs/README.md`)
 
 999. NEVER add code blocks or suggest how a variable should be named. This will be decided by Ralph.
 

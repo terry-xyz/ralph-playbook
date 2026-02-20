@@ -568,7 +568,7 @@ I'm still determining the value/viability of these, but the opportunities sound 
 - [Non-Deterministic Backpressure](#non-deterministic-backpressure) - Using LLM-as-judge for tests against subjective tasks (tone, aesthetics, UX). Binary pass/fail reviews that iterate until pass.
 - [Ralph-Friendly Work Branches](#ralph-friendly-work-branches) - Asking Ralph to "filter to feature X" at runtime is unreliable. Instead, create scoped plan per branch upfront.
 - [JTBD → Story Map → SLC Release](#jtbd--story-map--slc-release) - Push the power of "Letting Ralph Ralph" to connect JTBD's audience and activities to Simple/Lovable/Complete releases.
-- [Specs Mode](#specs-mode) - Dedicated mode for generating/maintaining specs with quality rules: behavioral outcomes only, topic scoping, consistent naming.
+- [Specs Audit](#specs-audit) - Dedicated mode for generating/maintaining specs with quality rules: behavioral outcomes only, topic scoping, consistent naming.
 
 ---
 
@@ -1257,7 +1257,7 @@ _Cardinalities:_
 
 ---
 
-### Specs Mode
+### Specs Audit
 
 A dedicated loop mode for generating and maintaining spec files with enforced quality rules. Ensures specs stay focused on behavioral outcomes (not implementation details), properly scoped topics ("one sentence without 'and'"), and consistent file naming conventions.
 
@@ -1312,7 +1312,7 @@ _Notes:_
 
 1. Identify Jobs to Be Done (JTBD) → Break individual JTBD into topic(s) of concern → Use subagents to load info from URLs into context → LLM understands JTBD topic of concern: subagent writes specs/FILENAME.md for each topic.
 
-## RULES (dont apply to `specs/README.md`)
+## RULES (don't apply to `specs/README.md`)
 
 999. NEVER add code blocks or suggest how a variable should be named. This will be decided by Ralph.
 

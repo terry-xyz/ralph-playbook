@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 # Usage: ./loop_streamed.sh [plan] [max_iterations]
 # Examples:
 #   ./loop_streamed.sh              # Build mode, unlimited iterations
@@ -68,7 +69,7 @@ Execute the instructions above."
         --model opus \
         --verbose \
         --output-format stream-json \
-        --include-partial-messages 2>&1 | node "$SCRIPT_DIR/parse_stream.js"
+        --include-partial-messages | node "$SCRIPT_DIR/parse_stream.js"
 
     echo ""
     echo "✅ Claude iteration complete"
