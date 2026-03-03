@@ -10,6 +10,6 @@
     "jsx": "react-jsx",
     "noEmit": false
   },
-  "include": ["src/server/**/*", "src/shared/**/*", "src/lib/**/*"],
+  "include": ["src/server/**/*", "src/shared/**/*", "src/lib/**/*", "src/cli/**/*", "src/hooks/**/*"],
   "exclude": ["node_modules", "dist", "src/client/**/*"]
 }

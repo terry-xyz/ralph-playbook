@@ -4,7 +4,7 @@
   "description": "Real-time monitoring dashboard for Claude Code sessions",
   "type": "module",
   "bin": {
-    "ralph-monitor": "./src/cli/index.js"
+    "ralph-monitor": "./dist/server/cli/index.js"
   },
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
@@ -14,7 +14,7 @@
     "start": "node dist/server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "init": "node src/cli/index.js init",
+    "init": "tsx src/cli/index.ts init",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
