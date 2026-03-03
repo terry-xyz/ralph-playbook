@@ -143,6 +143,41 @@ export class Storage {
         db.run("ALTER TABLE sessions ADD COLUMN subagent_tasks TEXT NOT NULL DEFAULT '[]';");
       }
     }
+
+    // Migrate model column from single string to JSON array format (S26)
+    this.migrateModelToJsonArray();
+  }
+
+  /**
+   * Migrate existing model column values from single strings to JSON arrays.
+   * E.g., 'claude-sonnet-4' → '["claude-sonnet-4"]', NULL → '[]'
+   * Idempotent: values already in JSON array format are not modified.
+   */
+  private migrateModelToJsonArray(): void {
+    const db = this.getDb();
+
+    // Sessions table: convert non-array model values
+    const sessions = db.exec("SELECT session_id, model FROM sessions WHERE model IS NOT NULL AND model != '' AND model NOT LIKE '[%';");
+    if (sessions.length > 0) {
+      for (const row of sessions[0].values) {
+        const sessionId = row[0] as string;
+        const model = row[1] as string;
+        db.run('UPDATE sessions SET model = ? WHERE session_id = ?;', [JSON.stringify([model]), sessionId]);
+      }
+    }
+    // Set NULL/empty to empty JSON array
+    db.run("UPDATE sessions SET model = '[]' WHERE model IS NULL OR model = '';");
+
+    // Metrics table: convert non-array model values
+    const metrics = db.exec("SELECT session_id, model FROM metrics WHERE model IS NOT NULL AND model != '' AND model NOT LIKE '[%';");
+    if (metrics.length > 0) {
+      for (const row of metrics[0].values) {
+        const sessionId = row[0] as string;
+        const model = row[1] as string;
+        db.run('UPDATE metrics SET model = ? WHERE session_id = ?;', [JSON.stringify([model]), sessionId]);
+      }
+    }
+    db.run("UPDATE metrics SET model = '[]' WHERE model IS NULL OR model = '';");
   }
 
   /** Check if FTS5 is available in this sql.js build. */

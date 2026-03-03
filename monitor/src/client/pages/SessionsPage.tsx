@@ -681,9 +681,9 @@ export default function SessionsPage() {
                       {session.agentName || '--'}
                     </TableCell>
 
-                    {/* Model */}
+                    {/* Model(s) */}
                     <TableCell className="text-gray-300 text-sm whitespace-nowrap">
-                      {session.model || '--'}
+                      {session.models?.length > 0 ? session.models.join(', ') : '--'}
                     </TableCell>
 
                     {/* Status */}

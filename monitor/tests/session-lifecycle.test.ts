@@ -296,6 +296,54 @@ describe('G2 — Agent phase inference', () => {
   });
 });
 
+// ── S26: Multi-Model Tracking ─────────────────────────────────────────────────
+
+describe('S26 — Multiple model tracking (Spec 03 AC 2)', () => {
+  it('should store initial model as JSON array on session creation', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({
+      sessionId: 's-model-1',
+      payload: { model: 'claude-sonnet-4' },
+    }));
+
+    const modelRaw = getSessionField(db, 's-model-1', 'model') as string;
+    expect(JSON.parse(modelRaw)).toEqual(['claude-sonnet-4']);
+  });
+
+  it('should accumulate multiple models without duplicates', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({
+      sessionId: 's-model-2',
+      payload: { model: 'claude-sonnet-4' },
+    }));
+    processEvent(db, makeEvent({
+      sessionId: 's-model-2',
+      payload: { model: 'claude-opus-4' },
+    }));
+    processEvent(db, makeEvent({
+      sessionId: 's-model-2',
+      payload: { model: 'claude-sonnet-4' }, // duplicate
+    }));
+
+    const modelRaw = getSessionField(db, 's-model-2', 'model') as string;
+    const models = JSON.parse(modelRaw);
+    expect(models).toContain('claude-sonnet-4');
+    expect(models).toContain('claude-opus-4');
+    expect(models).toHaveLength(2);
+  });
+
+  it('should store empty array when no model in payload', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({
+      sessionId: 's-model-3',
+      payload: {},
+    }));
+
+    const modelRaw = getSessionField(db, 's-model-3', 'model') as string;
+    expect(JSON.parse(modelRaw)).toEqual([]);
+  });
+});
+
 // ── G3: Stale Detection ──────────────────────────────────────────────────────
 
 describe('G3 — Orphan/stale detection', () => {

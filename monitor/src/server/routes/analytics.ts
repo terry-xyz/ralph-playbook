@@ -122,21 +122,46 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     const fromDate = query.from ?? new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).toISOString();
     const toDate = query.to ?? new Date().toISOString();
 
-    const groupByCol = dimension === 'model' ? 'model' : dimension === 'agent' ? 'agent_name' : 'project';
-
-    // Cost by dimension
-    const result = db.exec(
-      `SELECT ${groupByCol}, COALESCE(SUM(total_cost), 0) as cost
-       FROM sessions WHERE start_time >= ? AND start_time <= ?
-       GROUP BY ${groupByCol}
-       ORDER BY cost DESC;`,
-      [fromDate, toDate]
-    );
-
-    const breakdown = result.length > 0 ? result[0].values.map((row: unknown[]) => ({
-      name: row[0] ?? 'Unknown',
-      cost: row[1] as number,
-    })) : [];
+    // Cost by dimension — model dimension requires JSON array parsing
+    let breakdown: Array<{ name: unknown; cost: number }>;
+    if (dimension === 'model') {
+      // Model column stores JSON arrays; explode into per-model cost attribution
+      const result = db.exec(
+        `SELECT model, total_cost FROM sessions WHERE start_time >= ? AND start_time <= ?;`,
+        [fromDate, toDate]
+      );
+      const modelCostMap = new Map<string, number>();
+      if (result.length > 0) {
+        for (const row of result[0].values) {
+          let models: string[] = [];
+          try { models = JSON.parse(row[0] as string || '[]'); } catch { /* legacy */ }
+          if (!Array.isArray(models)) models = (row[0] as string) ? [row[0] as string] : [];
+          if (models.length === 0) models = ['Unknown'];
+          const cost = (row[1] as number) ?? 0;
+          // Split cost evenly across models in the session
+          const perModel = cost / models.length;
+          for (const m of models) {
+            modelCostMap.set(m, (modelCostMap.get(m) ?? 0) + perModel);
+          }
+        }
+      }
+      breakdown = Array.from(modelCostMap.entries())
+        .map(([name, cost]) => ({ name, cost }))
+        .sort((a, b) => b.cost - a.cost);
+    } else {
+      const groupByCol = dimension === 'agent' ? 'agent_name' : 'project';
+      const result = db.exec(
+        `SELECT ${groupByCol}, COALESCE(SUM(total_cost), 0) as cost
+         FROM sessions WHERE start_time >= ? AND start_time <= ?
+         GROUP BY ${groupByCol}
+         ORDER BY cost DESC;`,
+        [fromDate, toDate]
+      );
+      breakdown = result.length > 0 ? result[0].values.map((row: unknown[]) => ({
+        name: row[0] ?? 'Unknown',
+        cost: row[1] as number,
+      })) : [];
+    }
 
     const totalCost = breakdown.reduce((sum: number, b: { name: unknown; cost: number }) => sum + b.cost, 0);
 
@@ -157,17 +182,25 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     if (cacheResult.length > 0) {
       for (const row of cacheResult[0].values) {
         const tokens = JSON.parse(row[0] as string || '{}');
-        const model = row[1] as string || '';
+        // Parse models JSON array from metrics table
+        let models: string[] = [];
+        try { models = JSON.parse(row[1] as string || '[]'); } catch { /* legacy */ }
+        if (!Array.isArray(models)) models = (row[1] as string) ? [row[1] as string] : [];
         const sessionCacheRead = tokens.cacheRead ?? 0;
         cacheRead += sessionCacheRead;
         totalInput += (tokens.input ?? 0) + sessionCacheRead;
 
-        // Per-model cost avoided: difference between standard input pricing and cache-read pricing
-        const modelPricing = pricing[model];
-        if (modelPricing && sessionCacheRead > 0) {
-          const inputRate = modelPricing.inputPer1k ?? 0;
-          const cacheReadRate = modelPricing.cacheReadPer1k ?? 0;
-          costAvoided += sessionCacheRead * (inputRate - cacheReadRate) / 1000;
+        // Per-model cost avoided: use first model with configured pricing
+        if (sessionCacheRead > 0) {
+          for (const model of models) {
+            const modelPricing = pricing[model];
+            if (modelPricing) {
+              const inputRate = modelPricing.inputPer1k ?? 0;
+              const cacheReadRate = modelPricing.cacheReadPer1k ?? 0;
+              costAvoided += sessionCacheRead * (inputRate - cacheReadRate) / 1000;
+              break; // Use first matching model's pricing
+            }
+          }
         }
       }
     }
@@ -566,7 +599,11 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
         const hourKey = Math.floor(ts / 3600000) * 3600000;
         hourBuckets.set(hourKey, (hourBuckets.get(hourKey) ?? 0) + 1);
 
-        const model = (row[3] as string) ?? 'unknown';
+        // Parse models JSON array from session
+        let models: string[] = [];
+        try { models = JSON.parse(row[3] as string || '[]'); } catch { /* legacy */ }
+        if (!Array.isArray(models)) models = (row[3] as string) ? [row[3] as string] : [];
+        const model = models[0] ?? 'unknown';
         modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1);
         rawEvents.push({ ts, model });
       }

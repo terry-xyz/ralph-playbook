@@ -415,7 +415,7 @@ export default function SessionDetailPage() {
         />
         <MetricCard
           title="Model"
-          value={session.model || 'Unknown'}
+          value={session.models?.length > 0 ? session.models.join(', ') : 'Unknown'}
         />
         <MetricCard
           title="Error Count"

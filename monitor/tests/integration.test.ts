@@ -224,7 +224,7 @@ describe('Integration Test 1 — Full pipeline: event ingestion to API', () => {
     expect(detailRes.statusCode).toBe(200);
     const detailBody = JSON.parse(detailRes.body);
     expect(detailBody.session.sessionId).toBe(sessionId);
-    expect(detailBody.session.model).toBe('claude-sonnet-4');
+    expect(detailBody.session.models).toEqual(['claude-sonnet-4']);
     expect(detailBody.tools).toHaveLength(2); // Read and Edit
 
     // Verify events endpoint
@@ -861,14 +861,14 @@ describe('Integration Test 6 — Concurrent sessions', () => {
     const aBody = JSON.parse(aRes.body);
     expect(aBody.session.status).toBe('completed');
     expect(aBody.session.project).toBe('project-alpha');
-    expect(aBody.session.model).toBe('claude-sonnet-4');
+    expect(aBody.session.models).toContain('claude-sonnet-4');
 
     // Session B: completed, project-beta, model claude-opus-4, 1 turn
     const bRes = await fastify.inject({ method: 'GET', url: `/api/sessions/${sessB}` });
     const bBody = JSON.parse(bRes.body);
     expect(bBody.session.status).toBe('completed');
     expect(bBody.session.project).toBe('project-beta');
-    expect(bBody.session.model).toBe('claude-opus-4');
+    expect(bBody.session.models).toContain('claude-opus-4');
     expect(bBody.session.turnCount).toBe(1); // 1 UserPromptSubmit
 
     // Session C: running (not stopped), project-gamma, 1 error

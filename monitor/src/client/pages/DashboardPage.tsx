@@ -141,12 +141,12 @@ function SessionCard({ session, onClick }: { session: Session; onClick?: () => v
       </div>
 
       <div className="space-y-1.5">
-        {/* Model */}
-        {session.model && (
+        {/* Model(s) */}
+        {session.models?.length > 0 && (
           <div className="flex justify-between text-xs">
             <span className="text-gray-500">Model</span>
             <span className="text-gray-300 truncate ml-2 max-w-[140px]">
-              {session.model}
+              {session.models.join(', ')}
             </span>
           </div>
         )}

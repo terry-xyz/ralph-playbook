@@ -19,10 +19,24 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       ? projectResult[0].values.map((row: unknown[]) => row[0] as string)
       : [];
 
-    const modelResult = db.exec('SELECT DISTINCT model FROM sessions WHERE model IS NOT NULL AND model != \'\' ORDER BY model;');
-    const models = modelResult.length > 0
-      ? modelResult[0].values.map((row: unknown[]) => row[0] as string)
-      : [];
+    // Extract individual models from JSON arrays and deduplicate
+    const modelResult = db.exec("SELECT DISTINCT model FROM sessions WHERE model IS NOT NULL AND model != '' AND model != '[]';");
+    const modelsSet = new Set<string>();
+    if (modelResult.length > 0) {
+      for (const row of modelResult[0].values) {
+        try {
+          const arr = JSON.parse(row[0] as string);
+          if (Array.isArray(arr)) {
+            for (const m of arr) { if (typeof m === 'string' && m) modelsSet.add(m); }
+          } else if (typeof row[0] === 'string' && row[0]) {
+            modelsSet.add(row[0] as string);
+          }
+        } catch {
+          if (typeof row[0] === 'string' && row[0]) modelsSet.add(row[0] as string);
+        }
+      }
+    }
+    const models = Array.from(modelsSet).sort();
 
     return { projects, models };
   });
@@ -49,8 +63,9 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       params.push(query.project);
     }
     if (query.model) {
-      conditions.push('s.model = ?');
-      params.push(query.model);
+      // Model column stores JSON arrays; match sessions containing this model
+      conditions.push('s.model LIKE ?');
+      params.push(`%"${query.model}"%`);
     }
     if (query.from) {
       conditions.push('s.start_time >= ?');
@@ -99,24 +114,29 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       allParams
     );
 
-    const sessions = result.length > 0 ? result[0].values.map((row: unknown[]) => ({
-      sessionId: row[0],
-      project: row[1],
-      workspace: row[2],
-      model: row[3],
-      status: row[4],
-      startTime: row[5],
-      endTime: row[6],
-      totalCost: row[7],
-      tokenCounts: JSON.parse(row[8] as string || '{}'),
-      turnCount: row[9],
-      inferredPhase: row[10],
-      lastSeen: row[11],
-      errorCount: row[12],
-      agentName: row[13],
-      subagentCount: row[14] as number,
-      subagentTasks: JSON.parse(row[15] as string || '[]'),
-    })) : [];
+    const sessions = result.length > 0 ? result[0].values.map((row: unknown[]) => {
+      let models: string[] = [];
+      try { models = JSON.parse(row[3] as string || '[]'); } catch { /* legacy */ }
+      if (!Array.isArray(models)) models = (row[3] as string) ? [row[3] as string] : [];
+      return {
+        sessionId: row[0],
+        project: row[1],
+        workspace: row[2],
+        models,
+        status: row[4],
+        startTime: row[5],
+        endTime: row[6],
+        totalCost: row[7],
+        tokenCounts: JSON.parse(row[8] as string || '{}'),
+        turnCount: row[9],
+        inferredPhase: row[10],
+        lastSeen: row[11],
+        errorCount: row[12],
+        agentName: row[13],
+        subagentCount: row[14] as number,
+        subagentTasks: JSON.parse(row[15] as string || '[]'),
+      };
+    }) : [];
 
     return { data: sessions, total, page, limit };
   });
@@ -140,11 +160,14 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
     }
 
     const row = result[0].values[0];
+    let sessionModels: string[] = [];
+    try { sessionModels = JSON.parse(row[3] as string || '[]'); } catch { /* legacy */ }
+    if (!Array.isArray(sessionModels)) sessionModels = (row[3] as string) ? [row[3] as string] : [];
     const session = {
       sessionId: row[0],
       project: row[1],
       workspace: row[2],
-      model: row[3],
+      models: sessionModels,
       status: row[4],
       startTime: row[5],
       endTime: row[6],
@@ -169,10 +192,13 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
     let metrics = null;
     if (metricsResult.length > 0 && metricsResult[0].values.length > 0) {
       const m = metricsResult[0].values[0];
+      let metricsModels: string[] = [];
+      try { metricsModels = JSON.parse(m[2] as string || '[]'); } catch { /* legacy */ }
+      if (!Array.isArray(metricsModels)) metricsModels = (m[2] as string) ? [m[2] as string] : [];
       metrics = {
         costBreakdown: JSON.parse(m[0] as string || '{}'),
         tokenBreakdown: JSON.parse(m[1] as string || '{}'),
-        model: m[2],
+        models: metricsModels,
         wallClockDuration: m[3],
         apiDuration: m[4],
         turnCount: m[5],

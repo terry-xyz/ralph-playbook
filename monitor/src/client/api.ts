@@ -164,7 +164,7 @@ export interface RateLimitResponse {
 export interface SessionDetailMetrics {
   costBreakdown: { inputCost: number; outputCost: number; cacheCreationCost: number; cacheReadCost: number };
   tokenBreakdown: { input: number; output: number; cacheCreation: number; cacheRead: number };
-  model: string | null;
+  models: string[];
   wallClockDuration: number | null;
   apiDuration: number | null;
   turnCount: number;

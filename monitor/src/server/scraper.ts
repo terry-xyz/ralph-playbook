@@ -54,7 +54,7 @@ interface ParsedTurn {
 interface ParsedSessionData {
   totalCost: number | null;
   tokenBreakdown: TokenCounts | null;
-  model: string | null;
+  models: string[];
   wallClockDurationMs: number | null;
   apiDurationMs: number | null;
   turnCount: number;
@@ -224,7 +224,7 @@ export function parseSessionData(filePath: string, config: Readonly<Config>): Pa
   const result: ParsedSessionData = {
     totalCost: null,
     tokenBreakdown: null,
-    model: null,
+    models: [],
     wallClockDurationMs: null,
     apiDurationMs: null,
     turnCount: 0,
@@ -257,7 +257,7 @@ export function parseSessionData(filePath: string, config: Readonly<Config>): Pa
   let firstTimestamp: string | null = null;
   let lastTimestamp: string | null = null;
   let turnCount = 0;
-  let detectedModel: string | null = null;
+  const detectedModels = new Set<string>();
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -287,9 +287,9 @@ export function parseSessionData(filePath: string, config: Readonly<Config>): Pa
       turnCount++;
     }
 
-    // Extract model
+    // Extract model — collect all unique models (Spec 03 AC 2: multi-model support)
     if (parsed.model && typeof parsed.model === 'string') {
-      detectedModel = parsed.model;
+      detectedModels.add(parsed.model);
     }
 
     // Extract cost
@@ -351,7 +351,7 @@ export function parseSessionData(filePath: string, config: Readonly<Config>): Pa
       }
     : null;
 
-  result.model = detectedModel;
+  result.models = Array.from(detectedModels);
   result.turnCount = turnCount;
 
   // Wall-clock duration from first to last timestamp
@@ -598,10 +598,14 @@ function classifyErrorMessage(message: string): ErrorCategory {
  */
 function computeCostBreakdown(
   tokens: TokenCounts,
-  model: string | null,
+  models: string[],
   config: Readonly<Config>,
 ): CostBreakdown {
-  const pricing = model ? config.pricing[model] : null;
+  // Use the first model with configured pricing for cost calculation
+  let pricing: Config['pricing'][string] | null = null;
+  for (const m of models) {
+    if (config.pricing[m]) { pricing = config.pricing[m]; break; }
+  }
 
   if (!pricing) {
     return {
@@ -630,7 +634,7 @@ function upsertMetrics(
   sessionId: string,
   costBreakdown: CostBreakdown,
   tokenBreakdown: TokenCounts,
-  model: string | null,
+  models: string[],
   wallClockDuration: number | null,
   apiDuration: number | null,
   turnCount: number,
@@ -644,7 +648,7 @@ function upsertMetrics(
     sessionId,
     JSON.stringify(costBreakdown),
     JSON.stringify(tokenBreakdown),
-    model,
+    JSON.stringify(models),
     wallClockDuration,
     apiDuration,
     turnCount,
@@ -690,23 +694,33 @@ function updateSessionTotals(
   sessionId: string,
   totalCost: number,
   tokenCounts: TokenCounts,
-  model: string | null,
+  models: string[],
   turnCount: number,
 ): void {
-  // Only update fields that have actual values — don't overwrite with defaults
-  // if the session already has better data.
+  // Merge scraped models with existing session models (Spec 03 AC 2)
+  let mergedModels = models;
+  if (models.length > 0) {
+    const existingResult = db.exec('SELECT model FROM sessions WHERE session_id = ?;', [sessionId]);
+    if (existingResult.length > 0 && existingResult[0].values.length > 0) {
+      let existingModels: string[] = [];
+      try { existingModels = JSON.parse(existingResult[0].values[0][0] as string || '[]'); } catch { /* use empty */ }
+      const set = new Set([...existingModels, ...models]);
+      mergedModels = Array.from(set);
+    }
+  }
+
   db.run(`
     UPDATE sessions SET
       total_cost = MAX(total_cost, ?),
       token_counts = ?,
       turn_count = MAX(turn_count, ?),
-      model = COALESCE(?, model)
+      model = ?
     WHERE session_id = ?;
   `, [
     totalCost,
     JSON.stringify(tokenCounts),
     turnCount,
-    model,
+    JSON.stringify(mergedModels),
     sessionId,
   ]);
 }
@@ -753,7 +767,7 @@ export async function scrapeSession(
     let costBreakdown: CostBreakdown;
     if (data.totalCost !== null && data.tokenBreakdown) {
       // We have both direct cost and tokens — compute detailed breakdown
-      costBreakdown = computeCostBreakdown(data.tokenBreakdown, data.model, config);
+      costBreakdown = computeCostBreakdown(data.tokenBreakdown, data.models, config);
 
       // If the computed total differs significantly from the reported total,
       // prefer the reported total and distribute proportionally
@@ -772,7 +786,7 @@ export async function scrapeSession(
       }
     } else if (data.tokenBreakdown) {
       // Only tokens — compute cost from pricing config
-      costBreakdown = computeCostBreakdown(data.tokenBreakdown, data.model, config);
+      costBreakdown = computeCostBreakdown(data.tokenBreakdown, data.models, config);
     } else {
       // No token data — put total cost into inputCost as a catch-all
       costBreakdown = {
@@ -802,7 +816,7 @@ export async function scrapeSession(
         sessionId,
         costBreakdown,
         tokenBreakdown,
-        data.model,
+        data.models,
         wallClockDuration,
         apiDuration,
         data.turnCount,
@@ -813,7 +827,7 @@ export async function scrapeSession(
         sessionId,
         totalCost,
         tokenBreakdown,
-        data.model,
+        data.models,
         data.turnCount,
       );
 

@@ -40,7 +40,7 @@ const mockSessionData = {
   sessionId: 'test-session-123',
   project: 'my-project',
   workspace: '/home/user/project',
-  model: 'claude-sonnet-4-20250514',
+  models: ['claude-sonnet-4-20250514'],
   status: 'completed' as const,
   startTime: '2026-03-03T10:00:00.000Z',
   endTime: '2026-03-03T10:30:00.000Z',

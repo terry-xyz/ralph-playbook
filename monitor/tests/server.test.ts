@@ -138,7 +138,7 @@ function seedSession(
   `, [
     id,
     opts.project ?? 'test-project',
-    opts.model ?? 'claude-sonnet-4',
+    JSON.stringify([opts.model ?? 'claude-sonnet-4']),
     opts.status ?? 'running',
     opts.startTime ?? now,
     opts.endTime ?? null,
@@ -189,7 +189,7 @@ function seedMetrics(sessionId: string, opts: {
     sessionId,
     JSON.stringify(opts.costBreakdown ?? {}),
     JSON.stringify(opts.tokenBreakdown ?? { input: 100, output: 50, cacheRead: 30 }),
-    opts.model ?? 'claude-sonnet-4',
+    JSON.stringify([opts.model ?? 'claude-sonnet-4']),
     opts.wallClockDuration ?? 120,
     opts.apiDuration ?? 45,
     opts.turnCount ?? 10,
@@ -257,7 +257,7 @@ describe('H2 — GET /api/sessions', () => {
     expect(body.data).toHaveLength(1);
     expect(body.data[0].sessionId).toBe('s1');
     expect(body.data[0].project).toBe('acme');
-    expect(body.data[0].model).toBe('claude-sonnet-4');
+    expect(body.data[0].models).toEqual(['claude-sonnet-4']);
     expect(body.data[0].status).toBe('running');
     expect(body.total).toBe(1);
   });
@@ -348,7 +348,7 @@ describe('H2 — GET /api/sessions/:id', () => {
     expect(body.session.sessionId).toBe('s1');
     expect(body.session.project).toBe('acme');
     expect(body.metrics).not.toBeNull();
-    expect(body.metrics.model).toBe('claude-sonnet-4');
+    expect(body.metrics.models).toEqual(['claude-sonnet-4']);
     expect(body.tools).toHaveLength(2); // Read and Edit
   });
 

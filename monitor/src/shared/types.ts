@@ -72,7 +72,7 @@ export interface Session {
   sessionId: string;
   project: string;
   workspace: string;
-  model: string | null;
+  models: string[];
   status: SessionStatus;
   startTime: string; // ISO 8601
   endTime: string | null;
@@ -100,7 +100,7 @@ export interface SessionMetrics {
   sessionId: string;
   costBreakdown: CostBreakdown;
   tokenBreakdown: TokenCounts;
-  model: string;
+  models: string[];
   wallClockDuration: number; // seconds
   apiDuration: number; // seconds
   turnCount: number;

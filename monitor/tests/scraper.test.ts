@@ -178,16 +178,27 @@ describe('F1 — Metric extraction (all 8 categories)', () => {
       { role: 'assistant', model: 'claude-sonnet-4', timestamp: '2025-01-01T10:00:00Z' },
     ]);
     const data = parseSessionData(filePath, config);
-    expect(data.model).toBe('claude-sonnet-4');
+    expect(data.models).toEqual(['claude-sonnet-4']);
   });
 
-  it('should use last model when multiple models present (mid-session change)', () => {
+  it('should capture all models when multiple models present (Spec 03 AC 2)', () => {
     const filePath = writeSessionFile('s1', [
       { role: 'assistant', model: 'claude-haiku-4', timestamp: '2025-01-01T10:00:00Z' },
       { role: 'assistant', model: 'claude-sonnet-4', timestamp: '2025-01-01T10:01:00Z' },
     ]);
     const data = parseSessionData(filePath, config);
-    expect(data.model).toBe('claude-sonnet-4');
+    expect(data.models).toContain('claude-haiku-4');
+    expect(data.models).toContain('claude-sonnet-4');
+    expect(data.models).toHaveLength(2);
+  });
+
+  it('should deduplicate repeated models (Spec 03 AC 2)', () => {
+    const filePath = writeSessionFile('s1', [
+      { role: 'assistant', model: 'claude-sonnet-4', timestamp: '2025-01-01T10:00:00Z' },
+      { role: 'assistant', model: 'claude-sonnet-4', timestamp: '2025-01-01T10:01:00Z' },
+    ]);
+    const data = parseSessionData(filePath, config);
+    expect(data.models).toEqual(['claude-sonnet-4']);
   });
 
   it('should compute wall-clock duration from timestamps', () => {
@@ -405,7 +416,7 @@ describe('F2 — Database operations', () => {
     const tokenBreakdown = JSON.parse(row[2] as string);
     expect(tokenBreakdown.input).toBe(300);
     expect(tokenBreakdown.output).toBe(150);
-    expect(row[3]).toBe('claude-sonnet-4'); // model
+    expect(JSON.parse(row[3] as string)).toEqual(['claude-sonnet-4']); // models JSON array
     expect(row[5]).toBeCloseTo(5, 1); // api_duration in seconds (5000ms → 5s)
     expect(row[6]).toBe(2); // turn_count
   });
@@ -428,7 +439,7 @@ describe('F2 — Database operations', () => {
     expect(sessionResult).toHaveLength(1);
     const row = sessionResult[0].values[0];
     expect(row[0]).toBeGreaterThanOrEqual(0.25); // total_cost (MAX of old and new)
-    expect(row[1]).toBe('claude-sonnet-4'); // model
+    expect(JSON.parse(row[1] as string)).toContain('claude-sonnet-4'); // models JSON array
     expect(row[2]).toBeGreaterThanOrEqual(1); // turn_count
   });
 

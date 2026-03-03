@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S20/S22/S23/S24/S27/S28/S29/S30. 321 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S20/S22/S23/S24/S26/S27/S28/S29/S30. 325 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -60,7 +60,7 @@
 - [x] **S23** — Cost analytics endpoint "estimated cost avoided" (Spec 12 AC 21): Server-side per-model cost avoided calculation using (inputPer1k - cacheReadPer1k) rate difference; API returns `costAvoided` in costs response; CostsPage uses server value instead of hardcoded rate; 3 backend tests
 - [x] **S24** — Top stats toolCallsPerMin returns (timestamp, count) pairs (Spec 06): Changed from `number[]` to `{timestamp, count}[]` format; DashboardPage seeds sparkline from server data on load and merges with live WS events; 2 backend tests
 - [ ] **S25** — No Fastify schema validation on any API endpoint (Spec 06)
-- [ ] **S26** — Multiple model tracking stores only last model (Spec 03 AC 2)
+- [x] **S26** — Multiple model tracking (Spec 03 AC 2): Changed session `model` field from single string to JSON array; `processEvent()` accumulates all unique models per session; `parseSessionData()` collects all models using Set; DB migration converts legacy single-string values to JSON arrays; API returns `models: string[]`; client displays comma-separated model list; 3 new tests + all existing tests updated; 325 tests passing
 - [x] **S27** — Scraped errors persisted to database (Spec 03 AC 6): Added `ScrapedError` event type; `scrapeSession()` now inserts extracted errors into events table with pre-classified categories, increments session `error_count`; analytics error endpoints (list, trend, rate-limits) updated to include ScrapedError; 4 backend tests
 - [x] **S28** — Session detail enhancements (Spec 10 ACs 26-29, 36): Fixed `api.getSession()` to properly unwrap `{session, metrics, tools}` envelope; exact cost breakdown from metrics; expandable tool entries showing individual call inputs/outputs (AC 26); token usage BarChart (ACs 27-28); AC 36 (auto-refresh) was already implemented; fixed events endpoint to return `{data}` with correct field names matching `EventRecord` type
 - [x] **S29** — ErrorsPage missing: tool filter (Spec 13 AC 5), live updates (AC 29): Added tool filter TextInput + API param + SQL WHERE condition (AC 5); WebSocket live updates via useWebSocket hook with debounced re-fetch on error events (AC 29); 5 backend tests

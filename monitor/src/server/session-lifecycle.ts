@@ -163,6 +163,7 @@ export function processEvent(db: Database, event: EventRecord): void {
   if (existing.length === 0 || existing[0].values.length === 0) {
     // Auto-create session on first event (Spec 05 AC 1)
     const agentName = deriveAgentName(event.workspace);
+    const initialModels = event.payload.model ? [event.payload.model as string] : [];
     db.run(`
       INSERT INTO sessions (session_id, project, workspace, status, start_time, last_seen, model, agent_name)
       VALUES (?, ?, ?, 'running', ?, ?, ?, ?);
@@ -172,7 +173,7 @@ export function processEvent(db: Database, event: EventRecord): void {
       event.workspace,
       now,
       now,
-      (event.payload.model as string) ?? null,
+      JSON.stringify(initialModels),
       agentName,
     ]);
   } else {
@@ -219,12 +220,24 @@ export function processEvent(db: Database, event: EventRecord): void {
     );
   }
 
-  // Update model if provided
+  // Accumulate models: add new model to JSON array if not already present (Spec 03 AC 2)
   if (event.payload.model) {
-    db.run(
-      'UPDATE sessions SET model = ? WHERE session_id = ? AND (model IS NULL OR model = \'\');',
-      [event.payload.model as string, event.sessionId]
+    const newModel = event.payload.model as string;
+    const modelsResult = db.exec(
+      'SELECT model FROM sessions WHERE session_id = ?;',
+      [event.sessionId]
     );
+    let models: string[] = [];
+    if (modelsResult.length > 0 && modelsResult[0].values.length > 0) {
+      try { models = JSON.parse(modelsResult[0].values[0][0] as string || '[]'); } catch { /* use empty */ }
+    }
+    if (!models.includes(newModel)) {
+      models.push(newModel);
+      db.run(
+        'UPDATE sessions SET model = ? WHERE session_id = ?;',
+        [JSON.stringify(models), event.sessionId]
+      );
+    }
   }
 
   // Infer phase (G2) — update for tool events only

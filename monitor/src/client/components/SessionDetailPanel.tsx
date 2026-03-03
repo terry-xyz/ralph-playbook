@@ -532,7 +532,7 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
                   }
                 />
                 <StatCard label="Turn Count" value={String(session.turnCount)} />
-                <StatCard label="Model" value={session.model || 'Unknown'} />
+                <StatCard label="Model" value={session.models?.length > 0 ? session.models.join(', ') : 'Unknown'} />
                 <StatCard label="Errors" value={String(session.errorCount)} />
                 <StatCard
                   label="Tokens"
