@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Card,
   Table,
@@ -16,6 +15,7 @@ import {
   Button,
 } from '@tremor/react';
 import { api, type PaginatedResponse } from '@client/api';
+import SessionDetailPanel from '../components/SessionDetailPanel';
 import type { Session, SessionStatus } from '@shared/types';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -269,13 +269,12 @@ function PaginationControls({
 // ── Main Page Component ──────────────────────────────────────────────────────
 
 export default function SessionsPage() {
-  const navigate = useNavigate();
-
   // Data state
   const [sessions, setSessions] = useState<Session[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   // Sort state
   const [sortBy, setSortBy] = useState<SortField>('startTime');
@@ -376,9 +375,9 @@ export default function SessionsPage() {
     }
   }
 
-  // Handle row click
+  // Handle row click — open side panel
   function handleRowClick(sessionId: string) {
-    navigate(`/sessions/${encodeURIComponent(sessionId)}`);
+    setSelectedSessionId(sessionId);
   }
 
   // Clear all filters
@@ -643,6 +642,14 @@ export default function SessionsPage() {
           />
         )}
       </Card>
+
+      {/* Session Detail Side Panel */}
+      {selectedSessionId && (
+        <SessionDetailPanel
+          sessionId={selectedSessionId}
+          onClose={() => setSelectedSessionId(null)}
+        />
+      )}
     </div>
   );
 }

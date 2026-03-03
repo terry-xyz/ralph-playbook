@@ -41,7 +41,7 @@
 - [x] **S6a** — Config API PATCH route missing: Client sends PATCH but server only had PUT; added PATCH handler
 
 ### Backlog — High Priority
-- [ ] **S7** — Session Detail as side panel, not full page (Spec 10 ACs 1-11): Currently navigates to separate page instead of sliding panel
+- [x] **S7** — Session Detail as side panel (Spec 10 ACs 1-11): Implemented as SessionDetailPanel component with sliding panel, drag-to-resize, three dismissal methods (close button, Escape, click outside), and View Full navigation
 - [ ] **S8** — Full-text search on Sessions page (Spec 11 ACs 21-26): No search UI exists
 - [ ] **S9** — Cost trend time-series visualization (Spec 12 ACs 7-12): No chart, no daily/weekly/monthly granularity
 - [ ] **S10** — Budget threshold alert banners on Costs page (Spec 12 ACs 25-30): Not implemented
@@ -1493,6 +1493,7 @@ Phase R (Integration & Distribution)
 - **API/client shape mismatches found and fixed** — 3 bugs where server response shapes diverged from client TypeScript types: (1) Analytics overview returned `errorCount` but client expected `totalErrors`, plus missing `totalSessions` and `totalTokens` fields; (2) Cost analytics returned `{breakdown, totalCost, cacheHitRate, tokensSaved}` but client expected `CostDimension[]` with `key` instead of `name`; (3) Error analytics only queried `PostToolUseFailure` events with hardcoded `tool_failure` category — expanded to include Stop events with error payloads, with proper keyword-based categorization matching session-lifecycle.ts logic.
 - **Error analytics response uses `data` field** — Changed from `{errors: [...]}` to `{data: [...]}` to match PaginatedResponse<ErrorRecord> shape expected by ErrorsPage client component.
 - **Server-side error categorization mirrors categorizeError()** — The analytics errors endpoint now applies the same keyword-matching logic (rate_limit, auth_error, billing_error, server_error) as the session-lifecycle `categorizeError` function, ensuring consistent categorization across ingestion and query paths.
+- **SessionDetailPanel as overlay (not route)** — The session detail side panel is a fixed-position overlay rendered within DashboardPage and SessionsPage, not a route change. This preserves parent page state (scroll, filters, selections) while the panel is open. Width stored in sessionStorage (per browser session, not persisted permanently). Requires ResizeObserver polyfill in jsdom tests (Tremor uses it).
 
 ---
 

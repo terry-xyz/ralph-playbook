@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Card,
   Metric,
@@ -14,6 +13,7 @@ import {
 } from '@tremor/react';
 import { api, type AnalyticsOverview } from '../api';
 import { useWebSocket } from '../hooks/useWebSocket';
+import SessionDetailPanel from '../components/SessionDetailPanel';
 import type { Session, SessionStatus } from '@shared/types';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -220,8 +220,6 @@ function KpiCard({
 // ── Main Dashboard Page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const navigate = useNavigate();
-
   // ── State ────────────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState<Session[]>([]);
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
@@ -231,6 +229,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [toolCallTimestamps, setToolCallTimestamps] = useState<number[]>([]);
   const [rateLimitCount, setRateLimitCount] = useState(0);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const { status: wsStatus, lastEvent } = useWebSocket();
   const lastEventProcessed = useRef<unknown>(null);
@@ -542,7 +541,7 @@ export default function DashboardPage() {
                               <SessionCard
                                 key={session.sessionId}
                                 session={session}
-                                onClick={() => navigate(`/sessions/${session.sessionId}`)}
+                                onClick={() => setSelectedSessionId(session.sessionId)}
                               />
                             ))}
                         </div>
@@ -554,6 +553,14 @@ export default function DashboardPage() {
           );
         })}
       </div>
+
+      {/* ── Session Detail Side Panel ──────────────────────────────────────── */}
+      {selectedSessionId && (
+        <SessionDetailPanel
+          sessionId={selectedSessionId}
+          onClose={() => setSelectedSessionId(null)}
+        />
+      )}
     </div>
   );
 }
