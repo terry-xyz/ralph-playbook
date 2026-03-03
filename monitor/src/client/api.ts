@@ -1,0 +1,175 @@
+import type {
+  Session,
+  EventRecord,
+  ErrorRecord,
+  Config,
+  GuardrailLogEntry,
+} from '@shared/types';
+
+// ── Error class ──────────────────────────────────────────────────────────────
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public body?: unknown,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────────────
+
+function qs(params: Record<string, unknown> | undefined): string {
+  if (!params) return '';
+  const entries = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== null,
+  );
+  if (entries.length === 0) return '';
+  const search = new URLSearchParams();
+  for (const [k, v] of entries) {
+    search.set(k, String(v));
+  }
+  return `?${search.toString()}`;
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...init,
+    });
+  } catch (err) {
+    throw new ApiError(
+      `Network error: ${err instanceof Error ? err.message : 'unknown'}`,
+      0,
+    );
+  }
+
+  if (!response.ok) {
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = await response.text().catch(() => null);
+    }
+    throw new ApiError(
+      `HTTP ${response.status}: ${response.statusText}`,
+      response.status,
+      body,
+    );
+  }
+
+  return response.json() as Promise<T>;
+}
+
+// ── Response types ───────────────────────────────────────────────────────────
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AnalyticsOverview {
+  activeSessions: number;
+  totalSessions: number;
+  totalCost: number;
+  totalTokens: number;
+  totalErrors: number;
+  costByModel: Record<string, number>;
+}
+
+export interface CostDimension {
+  key: string;
+  cost: number;
+  tokens: number;
+}
+
+export interface SearchResult {
+  type: 'session' | 'event' | 'error';
+  id: string;
+  sessionId: string;
+  summary: string;
+  timestamp: string;
+}
+
+// ── API client ───────────────────────────────────────────────────────────────
+
+export const api = {
+  getSessions(params?: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    project?: string;
+    sortBy?: string;
+    order?: 'asc' | 'desc';
+  }): Promise<PaginatedResponse<Session>> {
+    return request(`/api/sessions${qs(params)}`);
+  },
+
+  getSession(id: string): Promise<Session> {
+    return request(`/api/sessions/${encodeURIComponent(id)}`);
+  },
+
+  getSessionEvents(
+    id: string,
+    params?: { page?: number; limit?: number },
+  ): Promise<PaginatedResponse<EventRecord>> {
+    return request(`/api/sessions/${encodeURIComponent(id)}/events${qs(params)}`);
+  },
+
+  getAnalyticsOverview(params?: {
+    range?: string;
+  }): Promise<AnalyticsOverview> {
+    return request(`/api/analytics/overview${qs(params)}`);
+  },
+
+  getAnalyticsCosts(params?: {
+    dimension?: string;
+    from?: string;
+    to?: string;
+  }): Promise<CostDimension[]> {
+    return request(`/api/analytics/costs${qs(params)}`);
+  },
+
+  getAnalyticsErrors(params?: {
+    page?: number;
+    limit?: number;
+    session?: string;
+    project?: string;
+  }): Promise<PaginatedResponse<ErrorRecord>> {
+    return request(`/api/analytics/errors${qs(params)}`);
+  },
+
+  getConfig(): Promise<Config> {
+    return request('/api/config');
+  },
+
+  updateConfig(body: Record<string, unknown>): Promise<Config> {
+    return request('/api/config', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  search(
+    q: string,
+    params?: { limit?: number },
+  ): Promise<SearchResult[]> {
+    return request(`/api/search${qs({ q, ...params })}`);
+  },
+
+  getGuardrailsLog(params?: {
+    page?: number;
+    limit?: number;
+    rule_name?: string;
+    action?: string;
+  }): Promise<PaginatedResponse<GuardrailLogEntry>> {
+    return request(`/api/guardrails/log${qs(params)}`);
+  },
+};
