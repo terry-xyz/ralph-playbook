@@ -35,6 +35,13 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     const activeResult = db.exec("SELECT COUNT(*) FROM sessions WHERE status = 'running';");
     const activeSessions = activeResult.length > 0 ? activeResult[0].values[0][0] as number : 0;
 
+    // Total sessions in time window
+    const totalSessionsResult = db.exec(
+      'SELECT COUNT(*) FROM sessions WHERE start_time >= ?;',
+      [fromDate]
+    );
+    const totalSessions = totalSessionsResult.length > 0 ? totalSessionsResult[0].values[0][0] as number : 0;
+
     // Total cost in time window
     const costResult = db.exec(
       'SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE start_time >= ?;',
@@ -42,19 +49,34 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     );
     const totalCost = costResult.length > 0 ? costResult[0].values[0][0] as number : 0;
 
+    // Total tokens in time window (sum from sessions table token_counts JSON)
+    const tokenResult = db.exec(
+      'SELECT token_counts FROM sessions WHERE start_time >= ?;',
+      [fromDate]
+    );
+    let totalTokens = 0;
+    if (tokenResult.length > 0) {
+      for (const row of tokenResult[0].values) {
+        try {
+          const tc = JSON.parse(row[0] as string || '{}');
+          totalTokens += (tc.input ?? 0) + (tc.output ?? 0) + (tc.cacheCreation ?? 0) + (tc.cacheRead ?? 0);
+        } catch { /* skip unparseable */ }
+      }
+    }
+
     // Error count and rate
     const errorCountResult = db.exec(
       "SELECT COUNT(*) FROM events WHERE type = 'PostToolUseFailure' AND timestamp >= ?;",
       [fromDate]
     );
-    const errorCount = errorCountResult.length > 0 ? errorCountResult[0].values[0][0] as number : 0;
+    const totalErrors = errorCountResult.length > 0 ? errorCountResult[0].values[0][0] as number : 0;
 
     const totalToolCallsResult = db.exec(
       "SELECT COUNT(*) FROM events WHERE type IN ('PostToolUse', 'PostToolUseFailure') AND timestamp >= ?;",
       [fromDate]
     );
     const totalToolCalls = totalToolCallsResult.length > 0 ? totalToolCallsResult[0].values[0][0] as number : 0;
-    const errorRate = totalToolCalls > 0 ? errorCount / totalToolCalls : 0;
+    const errorRate = totalToolCalls > 0 ? totalErrors / totalToolCalls : 0;
 
     // Rate limit incidents in last hour
     const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
@@ -78,8 +100,10 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
 
     return {
       activeSessions,
+      totalSessions,
       totalCost,
-      errorCount,
+      totalTokens,
+      totalErrors,
       errorRate,
       rateLimitIncidents,
       toolCallsPerMin,
@@ -140,7 +164,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     };
   });
 
-  // GET /api/analytics/errors — Error data
+  // GET /api/analytics/errors — Error data from all 3 error sources
   fastify.get('/api/analytics/errors', async (request) => {
     const db = (fastify as any).db as Database;
     const query = request.query as Record<string, string>;
@@ -149,8 +173,10 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     const limit = Math.min(100, Math.max(1, parseInt(query.limit ?? '50', 10) || 50));
     const offset = (page - 1) * limit;
 
-    // Build WHERE clause
-    const conditions: string[] = ["e.type = 'PostToolUseFailure'"];
+    // Query all error sources: PostToolUseFailure + Stop events with error payload
+    const conditions: string[] = [
+      "(e.type = 'PostToolUseFailure' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))"
+    ];
     const params: unknown[] = [];
 
     if (query.session) {
@@ -189,17 +215,55 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       allParams
     );
 
-    const errors = result.length > 0 ? result[0].values.map((row: unknown[]) => ({
-      eventId: row[0],
-      sessionId: row[1],
-      timestamp: row[2],
-      type: row[3],
-      toolName: row[4],
-      payload: JSON.parse(row[5] as string || '{}'),
-      project: row[6],
-      category: 'tool_failure', // PostToolUseFailure is always tool_failure
-    })) : [];
+    const errors = result.length > 0 ? result[0].values.map((row: unknown[]) => {
+      const eventType = row[3] as string;
+      const payloadStr = row[5] as string || '{}';
+      const payload = JSON.parse(payloadStr);
+      const toolName = row[4] as string | null;
 
-    return { errors, total, page, limit };
+      // Categorize error using keyword matching (mirrors session-lifecycle.ts categorizeError)
+      let category = 'tool_failure';
+      if (eventType === 'PostToolUseFailure') {
+        category = 'tool_failure';
+      } else {
+        const lower = payloadStr.toLowerCase();
+        if (lower.includes('rate limit') || lower.includes('429') || lower.includes('too many requests')) {
+          category = 'rate_limit';
+        } else if (lower.includes('auth') || lower.includes('401') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('403')) {
+          category = 'auth_error';
+        } else if (lower.includes('billing') || lower.includes('payment') || lower.includes('quota') || lower.includes('credit')) {
+          category = 'billing_error';
+        } else if (lower.includes('500') || lower.includes('502') || lower.includes('503') || lower.includes('internal server error') || lower.includes('service unavailable')) {
+          category = 'server_error';
+        } else {
+          category = 'server_error'; // Default for Stop errors
+        }
+      }
+
+      // Extract a human-readable message from the payload
+      const message = payload.error || payload.message || payload.output || `${eventType} event`;
+
+      return {
+        id: row[0],
+        sessionId: row[1],
+        timestamp: row[2],
+        category,
+        message: typeof message === 'string' ? message : JSON.stringify(message),
+        tool: toolName,
+        project: row[6],
+      };
+    }) : [];
+
+    // Apply category filter client-side if specified (after query)
+    const filteredErrors = query.category
+      ? errors.filter((e: { category: string }) => e.category === query.category)
+      : errors;
+
+    return {
+      data: filteredErrors,
+      total: query.category ? filteredErrors.length : total,
+      page,
+      limit,
+    };
   });
 }

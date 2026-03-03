@@ -400,8 +400,10 @@ describe('H3 — GET /api/analytics/overview', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body).toHaveProperty('activeSessions');
+    expect(body).toHaveProperty('totalSessions');
     expect(body).toHaveProperty('totalCost');
-    expect(body).toHaveProperty('errorCount');
+    expect(body).toHaveProperty('totalTokens');
+    expect(body).toHaveProperty('totalErrors');
     expect(body).toHaveProperty('errorRate');
     expect(body).toHaveProperty('rateLimitIncidents');
     expect(body).toHaveProperty('toolCallsPerMin');
@@ -425,7 +427,7 @@ describe('H3 — GET /api/analytics/overview', () => {
     seedEvent('e3', 's1', { type: 'PostToolUseFailure', timestamp: now });
     const res = await fastify.inject({ method: 'GET', url: '/api/analytics/overview' });
     const body = JSON.parse(res.body);
-    expect(body.errorCount).toBe(1);
+    expect(body.totalErrors).toBe(1);
     // 1 failure out of 3 total tool calls
     expect(body.errorRate).toBeCloseTo(1 / 3, 2);
   });
@@ -483,9 +485,9 @@ describe('H3 — GET /api/analytics/errors', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     // Only failures
-    expect(body.errors).toHaveLength(2);
+    expect(body.data).toHaveLength(2);
     expect(body.total).toBe(2);
-    expect(body.errors[0].category).toBe('tool_failure');
+    expect(body.data[0].category).toBe('tool_failure');
   });
 
   it('should filter errors by session', async () => {
@@ -496,8 +498,8 @@ describe('H3 — GET /api/analytics/errors', () => {
 
     const res = await fastify.inject({ method: 'GET', url: '/api/analytics/errors?session=s1' });
     const body = JSON.parse(res.body);
-    expect(body.errors).toHaveLength(1);
-    expect(body.errors[0].sessionId).toBe('s1');
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s1');
   });
 });
 

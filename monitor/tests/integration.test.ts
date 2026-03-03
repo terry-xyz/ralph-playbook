@@ -576,7 +576,7 @@ describe('Integration Test 3 — Analytics endpoint accuracy', () => {
     const res = await fastify.inject({ method: 'GET', url: '/api/analytics/overview' });
     const body = JSON.parse(res.body);
 
-    expect(body.errorCount).toBe(1);
+    expect(body.totalErrors).toBe(1);
     // 1 failure out of 3 tool calls (2 PostToolUse + 1 PostToolUseFailure)
     expect(body.errorRate).toBeCloseTo(1 / 3, 2);
   });
@@ -995,17 +995,17 @@ describe('Integration Test 7 — Error categorization through pipeline', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.total).toBe(2);
-    expect(body.errors).toHaveLength(2);
+    expect(body.data).toHaveLength(2);
 
     // Each error should be categorized as tool_failure (PostToolUseFailure default)
-    for (const err of body.errors) {
+    for (const err of body.data) {
       expect(err.category).toBe('tool_failure');
       expect(err.sessionId).toBe(sessionId);
       expect(err.project).toBe('error-project');
     }
 
     // Verify the tool names are present
-    const tools = body.errors.map((e: { toolName: string }) => e.toolName);
+    const tools = body.data.map((e: { tool: string }) => e.tool);
     expect(tools).toContain('Edit');
     expect(tools).toContain('Bash');
   });
@@ -1056,7 +1056,7 @@ describe('Integration Test 7 — Error categorization through pipeline', () => {
     const res = await fastify.inject({ method: 'GET', url: `/api/analytics/errors?session=${sessA}` });
     const body = JSON.parse(res.body);
     expect(body.total).toBe(1);
-    expect(body.errors[0].sessionId).toBe(sessA);
+    expect(body.data[0].sessionId).toBe(sessA);
   });
 });
 

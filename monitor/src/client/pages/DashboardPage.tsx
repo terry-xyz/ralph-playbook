@@ -81,11 +81,6 @@ function truncateId(id: string, len = 12): string {
   return id.slice(0, len) + '...';
 }
 
-function errorRate(errors: number, total: number): string {
-  if (total === 0) return '0%';
-  return `${((errors / total) * 100).toFixed(1)}%`;
-}
-
 // ── Connection Status Indicator ──────────────────────────────────────────────
 
 function ConnectionIndicator({ status }: { status: string }) {
@@ -436,7 +431,7 @@ export default function DashboardPage() {
             deltaType={totalErrors === 0 ? 'unchanged' : 'moderateDecrease'}
             size="xs"
           >
-            {errorRate(totalErrors, totalSessions)} error rate
+            {((overview?.errorRate ?? 0) * 100).toFixed(1)}% error rate
           </BadgeDelta>
         </KpiCard>
 

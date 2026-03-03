@@ -81,13 +81,21 @@ export interface AnalyticsOverview {
   totalCost: number;
   totalTokens: number;
   totalErrors: number;
-  costByModel: Record<string, number>;
+  errorRate: number;
+  rateLimitIncidents: number;
+  toolCallsPerMin: number[];
 }
 
 export interface CostDimension {
-  key: string;
+  name: string;
   cost: number;
-  tokens: number;
+}
+
+export interface CostAnalyticsResponse {
+  breakdown: CostDimension[];
+  totalCost: number;
+  cacheHitRate: number;
+  tokensSaved: number;
 }
 
 export interface SearchResult {
@@ -133,7 +141,7 @@ export const api = {
     dimension?: string;
     from?: string;
     to?: string;
-  }): Promise<CostDimension[]> {
+  }): Promise<CostAnalyticsResponse> {
     return request(`/api/analytics/costs${qs(params)}`);
   },
 

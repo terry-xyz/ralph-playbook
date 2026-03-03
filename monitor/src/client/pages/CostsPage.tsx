@@ -14,19 +14,12 @@ import {
   Flex,
   Grid,
 } from '@tremor/react';
-import { api, type CostDimension } from '../api';
+import { api, type CostDimension, type CostAnalyticsResponse } from '../api';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
 type TimeRange = 'today' | 'this_week' | 'this_month';
 type Dimension = 'project' | 'model';
-
-interface OverviewData {
-  totalCost: number;
-  totalSessions: number;
-  totalTokens: number;
-  costByModel: Record<string, number>;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -80,8 +73,8 @@ const RANGE_LABELS: Record<TimeRange, string> = {
 export default function CostsPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>('this_month');
   const [dimension, setDimension] = useState<Dimension>('project');
-  const [costData, setCostData] = useState<CostDimension[]>([]);
-  const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [costResponse, setCostResponse] = useState<CostAnalyticsResponse | null>(null);
+  const [overview, setOverview] = useState<{ totalCost: number; totalSessions: number; totalTokens: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,7 +106,7 @@ export default function CostsPage() {
       .getAnalyticsCosts({ dimension, ...params })
       .then((data) => {
         if (!cancelled) {
-          setCostData(data);
+          setCostResponse(data);
           setLoading(false);
         }
       })
@@ -130,32 +123,29 @@ export default function CostsPage() {
   }, [timeRange, dimension]);
 
   // Derived values
-  const totalSpend = overview?.totalCost ?? costData.reduce((sum, d) => sum + d.cost, 0);
+  const costData = costResponse?.breakdown ?? [];
+  const totalSpend = overview?.totalCost ?? costResponse?.totalCost ?? 0;
   const totalSessions = overview?.totalSessions ?? 0;
   const avgCostPerSession = totalSessions > 0 ? totalSpend / totalSessions : 0;
 
-  const totalTokens = overview?.totalTokens ?? costData.reduce((sum, d) => sum + d.tokens, 0);
+  const totalTokens = overview?.totalTokens ?? 0;
 
-  // Estimate cache metrics from cost data
-  const cacheTokensSaved = useMemo(() => {
-    return costData.reduce((sum, d) => sum + Math.floor(d.tokens * 0.15), 0);
-  }, [costData]);
-
-  const cacheHitRate = totalTokens > 0 ? (cacheTokensSaved / totalTokens) * 100 : 0;
-  const costAvoided = cacheTokensSaved * 0.000003; // rough estimate
+  // Cache metrics from the cost analytics response (server-computed)
+  const cacheHitRate = (costResponse?.cacheHitRate ?? 0) * 100;
+  const cacheTokensSaved = costResponse?.tokensSaved ?? 0;
+  const costAvoided = cacheTokensSaved * 0.000003; // rough estimate at standard input rate
 
   // Chart data
   const donutData = useMemo(
-    () => costData.map((d) => ({ name: d.key, value: d.cost })),
+    () => costData.map((d) => ({ name: d.name, value: d.cost })),
     [costData],
   );
 
   const barData = useMemo(
     () =>
       costData.map((d) => ({
-        name: d.key,
+        name: d.name,
         Cost: d.cost,
-        Tokens: d.tokens,
       })),
     [costData],
   );
