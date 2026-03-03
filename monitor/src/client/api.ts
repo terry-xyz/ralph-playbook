@@ -98,6 +98,28 @@ export interface CostAnalyticsResponse {
   tokensSaved: number;
 }
 
+export interface CostTrendPoint {
+  date: string;
+  cost: number;
+}
+
+export interface CostTrendResponse {
+  current: CostTrendPoint[];
+  previous: CostTrendPoint[];
+  granularity: string;
+}
+
+export interface BudgetAlert {
+  type: 'daily' | 'session';
+  limit: number;
+  actual: number;
+  sessionId?: string;
+}
+
+export interface BudgetAlertsResponse {
+  alerts: BudgetAlert[];
+}
+
 export interface SearchResult {
   type: 'session' | 'event' | 'error';
   id: string;
@@ -153,6 +175,18 @@ export const api = {
     to?: string;
   }): Promise<CostAnalyticsResponse> {
     return request(`/api/analytics/costs${qs(params)}`);
+  },
+
+  getAnalyticsCostTrend(params?: {
+    granularity?: string;
+    from?: string;
+    to?: string;
+  }): Promise<CostTrendResponse> {
+    return request(`/api/analytics/costs/trend${qs(params)}`);
+  },
+
+  getBudgetAlerts(): Promise<BudgetAlertsResponse> {
+    return request('/api/analytics/budget-alerts');
   },
 
   getAnalyticsErrors(params?: {

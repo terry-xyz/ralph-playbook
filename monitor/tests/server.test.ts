@@ -100,7 +100,9 @@ async function createTestServer() {
   fastify = Fastify({ logger: false });
 
   // Decorate with what routes expect
+  const config = loadConfig(configPath);
   fastify.decorate('db', db);
+  fastify.decorate('config', config);
   fastify.decorate('configPath', configPath);
 
   // Register routes
@@ -983,6 +985,264 @@ describe('S13 — Model filter on GET /api/sessions', () => {
     const body = JSON.parse(res.body);
     expect(body.data).toHaveLength(1);
     expect(body.data[0].sessionId).toBe('s-m2');
+  });
+});
+
+// ── S9: Cost Trend Over Time (Spec 12 ACs 7-12) ────────────────────────────
+
+describe('S9 — GET /api/analytics/costs/trend', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return trend data with current and previous arrays at daily granularity', async () => {
+    const today = new Date();
+    const todayStr = today.toISOString();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    seedSession('s-trend-1', { totalCost: 1.5, startTime: todayStr });
+    seedSession('s-trend-2', { totalCost: 2.0, startTime: yesterday.toISOString() });
+
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?granularity=daily&from=${weekStart.toISOString()}&to=${todayStr}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toHaveProperty('current');
+    expect(body).toHaveProperty('previous');
+    expect(body).toHaveProperty('granularity', 'daily');
+    expect(Array.isArray(body.current)).toBe(true);
+    expect(Array.isArray(body.previous)).toBe(true);
+  });
+
+  it('should aggregate costs by day in daily granularity', async () => {
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const todayStr = today.toISOString();
+    const todayStart = new Date(today);
+    todayStart.setHours(0, 0, 0, 0);
+
+    seedSession('s-d1', { totalCost: 1.0, startTime: todayStr });
+    seedSession('s-d2', { totalCost: 2.0, startTime: todayStr });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?granularity=daily&from=${todayStart.toISOString()}&to=${new Date(today.getTime() + 86400000).toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.current.length).toBeGreaterThanOrEqual(1);
+    const todayBucket = body.current.find((p: { date: string }) => p.date === todayStr.slice(0, 10));
+    expect(todayBucket).toBeDefined();
+    expect(todayBucket.cost).toBeCloseTo(3.0);
+  });
+
+  it('should support weekly granularity', async () => {
+    const today = new Date();
+    seedSession('s-w1', { totalCost: 5.0, startTime: today.toISOString() });
+
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?granularity=weekly&from=${monthStart.toISOString()}&to=${today.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.granularity).toBe('weekly');
+    expect(body.current.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should support monthly granularity', async () => {
+    const today = new Date();
+    seedSession('s-m1', { totalCost: 10.0, startTime: today.toISOString() });
+
+    const yearStart = new Date(today.getFullYear(), 0, 1);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?granularity=monthly&from=${yearStart.toISOString()}&to=${today.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.granularity).toBe('monthly');
+    expect(body.current.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should include previous period comparison data', async () => {
+    const today = new Date();
+    const sevenDaysAgo = new Date(today.getTime() - 7 * 86400000);
+    const fourteenDaysAgo = new Date(today.getTime() - 14 * 86400000);
+
+    // Session in "previous" period
+    seedSession('s-prev', { totalCost: 3.0, startTime: fourteenDaysAgo.toISOString() });
+    // Session in "current" period
+    seedSession('s-cur', { totalCost: 5.0, startTime: today.toISOString() });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?granularity=daily&from=${sevenDaysAgo.toISOString()}&to=${today.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.current.length).toBeGreaterThanOrEqual(1);
+    expect(body.previous.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should return empty arrays when no data', async () => {
+    const today = new Date();
+    const weekAgo = new Date(today.getTime() - 7 * 86400000);
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?granularity=daily&from=${weekAgo.toISOString()}&to=${today.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.current).toEqual([]);
+    expect(body.previous).toEqual([]);
+  });
+
+  it('should default to daily granularity when not specified', async () => {
+    const today = new Date();
+    seedSession('s-def', { totalCost: 1.0, startTime: today.toISOString() });
+
+    const weekAgo = new Date(today.getTime() - 7 * 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/costs/trend?from=${weekAgo.toISOString()}&to=${today.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.granularity).toBe('daily');
+  });
+});
+
+// ── S10: Budget Threshold Alerts (Spec 12 ACs 25-30) ───────────────────────
+
+/**
+ * Budget alert tests need a mutable config, so we build a custom Fastify instance
+ * with a plain (unfrozen) config object rather than using loadConfig's frozen result.
+ */
+describe('S10 — GET /api/analytics/budget-alerts', () => {
+  let budgetDb: Database;
+  let budgetFastify: FastifyInstance;
+  let budgetTmpDir: string;
+  let budgetConfig: Record<string, unknown>;
+
+  async function createBudgetTestServer(alertOverrides: { perSessionCostLimit?: number | null; perDayCostLimit?: number | null } = {}) {
+    const SQL = await initSqlJs();
+    budgetDb = new SQL.Database();
+    budgetDb.run('PRAGMA foreign_keys=ON;');
+    budgetDb.exec(SCHEMA_DDL);
+
+    budgetTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ralph-budget-test-'));
+    const configPath = path.join(budgetTmpDir, 'test-config.json');
+
+    budgetConfig = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60, retentionDays: 30 },
+      alerts: {
+        perSessionCostLimit: alertOverrides.perSessionCostLimit ?? null,
+        perDayCostLimit: alertOverrides.perDayCostLimit ?? null,
+      },
+    };
+
+    budgetFastify = Fastify({ logger: false });
+    budgetFastify.decorate('db', budgetDb);
+    budgetFastify.decorate('config', budgetConfig);
+    budgetFastify.decorate('configPath', configPath);
+
+    registerAnalyticsRoutes(budgetFastify);
+    await budgetFastify.ready();
+  }
+
+  function budgetSeedSession(id: string, opts: { totalCost?: number; startTime?: string } = {}) {
+    const now = new Date().toISOString();
+    budgetDb.run(`
+      INSERT INTO sessions (session_id, project, workspace, model, status, start_time, total_cost, turn_count, last_seen, error_count)
+      VALUES (?, 'test', '', 'claude-sonnet-4', 'running', ?, ?, 0, ?, 0);
+    `, [id, opts.startTime ?? now, opts.totalCost ?? 0, now]);
+  }
+
+  afterEach(async () => {
+    await budgetFastify?.close();
+    budgetDb?.close();
+    if (budgetTmpDir) fs.rmSync(budgetTmpDir, { recursive: true, force: true });
+  });
+
+  it('should return empty alerts when no limits configured', async () => {
+    await createBudgetTestServer();
+    const res = await budgetFastify.inject({ method: 'GET', url: '/api/analytics/budget-alerts' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toHaveProperty('alerts');
+    expect(body.alerts).toEqual([]);
+  });
+
+  it('should return daily alert when daily limit exceeded', async () => {
+    await createBudgetTestServer({ perDayCostLimit: 5.0 });
+
+    budgetSeedSession('s-budget-1', { totalCost: 6.0, startTime: new Date().toISOString() });
+
+    const res = await budgetFastify.inject({ method: 'GET', url: '/api/analytics/budget-alerts' });
+    const body = JSON.parse(res.body);
+    expect(body.alerts.length).toBeGreaterThanOrEqual(1);
+    const dailyAlert = body.alerts.find((a: { type: string }) => a.type === 'daily');
+    expect(dailyAlert).toBeDefined();
+    expect(dailyAlert.limit).toBe(5.0);
+    expect(dailyAlert.actual).toBeGreaterThan(5.0);
+  });
+
+  it('should return session alert when per-session limit exceeded', async () => {
+    await createBudgetTestServer({ perSessionCostLimit: 2.0 });
+
+    budgetSeedSession('s-expensive', { totalCost: 3.5, startTime: new Date().toISOString() });
+    budgetSeedSession('s-cheap', { totalCost: 1.0, startTime: new Date().toISOString() });
+
+    const res = await budgetFastify.inject({ method: 'GET', url: '/api/analytics/budget-alerts' });
+    const body = JSON.parse(res.body);
+    const sessionAlerts = body.alerts.filter((a: { type: string }) => a.type === 'session');
+    expect(sessionAlerts.length).toBe(1);
+    expect(sessionAlerts[0].sessionId).toBe('s-expensive');
+    expect(sessionAlerts[0].actual).toBe(3.5);
+    expect(sessionAlerts[0].limit).toBe(2.0);
+  });
+
+  it('should return multiple alerts when both limits exceeded', async () => {
+    await createBudgetTestServer({ perSessionCostLimit: 2.0, perDayCostLimit: 3.0 });
+
+    budgetSeedSession('s-both-1', { totalCost: 2.5, startTime: new Date().toISOString() });
+    budgetSeedSession('s-both-2', { totalCost: 1.0, startTime: new Date().toISOString() });
+
+    const res = await budgetFastify.inject({ method: 'GET', url: '/api/analytics/budget-alerts' });
+    const body = JSON.parse(res.body);
+    expect(body.alerts.length).toBeGreaterThanOrEqual(2);
+    expect(body.alerts.some((a: { type: string }) => a.type === 'daily')).toBe(true);
+    expect(body.alerts.some((a: { type: string }) => a.type === 'session')).toBe(true);
+  });
+
+  it('should not return alerts when spending is below limits', async () => {
+    await createBudgetTestServer({ perSessionCostLimit: 10.0, perDayCostLimit: 20.0 });
+
+    budgetSeedSession('s-under', { totalCost: 1.0, startTime: new Date().toISOString() });
+
+    const res = await budgetFastify.inject({ method: 'GET', url: '/api/analytics/budget-alerts' });
+    const body = JSON.parse(res.body);
+    expect(body.alerts).toEqual([]);
+  });
+
+  it('should return multiple session alerts when multiple sessions exceed limit', async () => {
+    await createBudgetTestServer({ perSessionCostLimit: 1.0 });
+
+    budgetSeedSession('s-over-1', { totalCost: 2.0, startTime: new Date().toISOString() });
+    budgetSeedSession('s-over-2', { totalCost: 3.0, startTime: new Date().toISOString() });
+    budgetSeedSession('s-under-1', { totalCost: 0.5, startTime: new Date().toISOString() });
+
+    const res = await budgetFastify.inject({ method: 'GET', url: '/api/analytics/budget-alerts' });
+    const body = JSON.parse(res.body);
+    const sessionAlerts = body.alerts.filter((a: { type: string }) => a.type === 'session');
+    expect(sessionAlerts.length).toBe(2);
   });
 });
 

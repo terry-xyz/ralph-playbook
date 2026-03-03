@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S13/S14/S15. 267 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S13/S14/S15/S16. 280 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -46,11 +46,11 @@
 - [x] **S13** — Model filter on Sessions page (Spec 11 AC 14): Added model dropdown populated from data via `GET /api/sessions/filters` endpoint, filters server-side
 - [x] **S14** — Agent name column in Sessions table (Spec 11 AC 1): Added `agentName` field to Session type, `agent_name` column to DB schema with migration, derived from workspace path in session-lifecycle, displayed as column in table
 - [x] **S15** — Live-updating duration for running sessions (Spec 11 AC 3): Added `LiveDurationCell` component with 1-second interval timer for running sessions, shows elapsed time from startTime to now
-- [ ] **S9** — Cost trend time-series visualization (Spec 12 ACs 7-12): No chart, no daily/weekly/monthly granularity
-- [ ] **S10** — Budget threshold alert banners on Costs page (Spec 12 ACs 25-30): Not implemented
+- [x] **S9** — Cost trend time-series visualization (Spec 12 ACs 7-12): Added `GET /api/analytics/costs/trend` endpoint with daily/weekly/monthly granularity and previous period comparison; AreaChart component in CostsPage with granularity selector; 7 backend tests
+- [x] **S10** — Budget threshold alert banners on Costs page (Spec 12 ACs 25-30): Added `GET /api/analytics/budget-alerts` endpoint checking per-session and per-day limits from config; persistent amber alert banners on CostsPage; 6 backend tests
+- [x] **S16** — Custom date range picker on Costs page (Spec 12 AC 34): Added custom date range option with two date inputs alongside preset buttons; also added "agent name" dimension
 - [ ] **S11** — Error rate time-series chart (Spec 13 ACs 18-21): No chart component
 - [ ] **S12** — Rate limit sub-view on Errors page (Spec 13 ACs 22-26): Not implemented
-- [ ] **S16** — Custom date range picker on Costs page (Spec 12 AC 34): Only preset buttons exist
 - [ ] **S17** — Scraper not integrated into ingestion pipeline (Spec 02/03): scrapeSession() never called from ingester
 - [ ] **S18** — Ingester daemon process missing (Spec 02): No lock file, detached process, signal handling
 - [ ] **S19** — Project collision disambiguation (Spec 01 AC 23, Spec 05 AC 7): No hash-based disambiguation
@@ -1489,7 +1489,7 @@ Phase R (Integration & Distribution)
 - **CLI uses Node.js readline (no external CLI deps), 7-step wizard** — The setup wizard uses only built-in Node.js `readline` for interactive prompts, keeping the dependency footprint minimal while implementing a 7-step guided flow.
 - **Hook injection preserves existing hooks, prevents duplicates via marker strings** — When injecting monitoring hooks into Claude Code settings, existing hook entries are preserved unchanged. Marker strings in hook commands allow re-run detection to prevent duplicate entries.
 - **22 integration tests cover full pipeline end-to-end** — Integration tests validate the complete flow from hook event file writes through ingestion, database storage, WebSocket delivery, and REST API responses.
-- **Total: 267 tests across 10 files** — Full test suite covers all phases A through R plus gap items S8/S13/S14/S15 with comprehensive coverage of the server, API, scraper, CLI, and integration layers.
+- **Total: 280 tests across 10 files** — Full test suite covers all phases A through R plus gap items S8/S9/S10/S13/S14/S15/S16 with comprehensive coverage of the server, API, scraper, CLI, and integration layers.
 - **API response shape fix** — `GET /api/sessions` now returns `{ data, total, page, limit }` instead of `{ sessions, total, page, limit }` to match the `PaginatedResponse<T>` client type. This fixes a client-server type mismatch that would have caused the SessionsPage to fail at runtime.
 - **Schema migration for agent_name** — Added `Storage.migrateSchema()` that uses `PRAGMA table_info` to detect missing columns and ALTERs the table. This supports loading pre-S14 database files without data loss.
 - **Full-text search via subquery** — Sessions search uses `WHERE session_id IN (SELECT DISTINCT session_id FROM events WHERE payload LIKE ?)` to find sessions by event payload content. Combines cleanly with all other filters and pagination.
@@ -1498,6 +1498,10 @@ Phase R (Integration & Distribution)
 - **Error analytics response uses `data` field** — Changed from `{errors: [...]}` to `{data: [...]}` to match PaginatedResponse<ErrorRecord> shape expected by ErrorsPage client component.
 - **Server-side error categorization mirrors categorizeError()** — The analytics errors endpoint now applies the same keyword-matching logic (rate_limit, auth_error, billing_error, server_error) as the session-lifecycle `categorizeError` function, ensuring consistent categorization across ingestion and query paths.
 - **SessionDetailPanel as overlay (not route)** — The session detail side panel is a fixed-position overlay rendered within DashboardPage and SessionsPage, not a route change. This preserves parent page state (scroll, filters, selections) while the panel is open. Width stored in sessionStorage (per browser session, not persisted permanently). Requires ResizeObserver polyfill in jsdom tests (Tremor uses it).
+- **loadConfig returns frozen objects** — `loadConfig()` deep-freezes the returned Config object. Test code that needs to modify config (e.g., budget alert tests) must use a plain mutable object via Fastify decorator instead of mutating the frozen config.
+- **Cost trend endpoint design** — `GET /api/analytics/costs/trend` accepts `granularity` (daily/weekly/monthly), `from`, `to` params. Returns `{current, previous, granularity}` where previous period is the same-duration window immediately before the current period, enabling side-by-side comparison.
+- **Budget alerts endpoint design** — `GET /api/analytics/budget-alerts` reads `config.alerts.perSessionCostLimit` and `config.alerts.perDayCostLimit`, queries sessions table, and returns `{alerts: [{type, limit, actual, sessionId?}]}`. Separate endpoint keeps the concern isolated from other analytics.
+- **Costs page dimension='agent' support** — The cost-by-dimension endpoint now supports `dimension=agent` which groups by `agent_name` column, enabling agent-level cost attribution (Spec 12 AC 3).
 
 ---
 

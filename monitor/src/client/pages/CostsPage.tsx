@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card,
   Metric,
@@ -7,6 +7,7 @@ import {
   Subtitle,
   DonutChart,
   BarChart,
+  AreaChart,
   Select,
   SelectItem,
   Button,
@@ -14,12 +15,18 @@ import {
   Flex,
   Grid,
 } from '@tremor/react';
-import { api, type CostDimension, type CostAnalyticsResponse } from '../api';
+import {
+  api,
+  type CostAnalyticsResponse,
+  type CostTrendResponse,
+  type BudgetAlert,
+} from '../api';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-type TimeRange = 'today' | 'this_week' | 'this_month';
-type Dimension = 'project' | 'model';
+type TimeRange = 'today' | 'this_week' | 'this_month' | 'custom';
+type Dimension = 'project' | 'model' | 'agent';
+type Granularity = 'daily' | 'weekly' | 'monthly';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -33,7 +40,11 @@ function compactNumber(value: number): string {
   return value.toLocaleString();
 }
 
-function timeRangeToParams(range: TimeRange): { from?: string; to?: string } {
+function timeRangeToParams(range: TimeRange, customFrom?: string, customTo?: string): { from: string; to: string } {
+  if (range === 'custom' && customFrom && customTo) {
+    return { from: new Date(customFrom).toISOString(), to: new Date(customTo + 'T23:59:59').toISOString() };
+  }
+
   const now = new Date();
   const to = now.toISOString();
   let from: string;
@@ -52,7 +63,8 @@ function timeRangeToParams(range: TimeRange): { from?: string; to?: string } {
       from = start.toISOString();
       break;
     }
-    case 'this_month': {
+    case 'this_month':
+    default: {
       const start = new Date(now.getFullYear(), now.getMonth(), 1);
       from = start.toISOString();
       break;
@@ -62,37 +74,53 @@ function timeRangeToParams(range: TimeRange): { from?: string; to?: string } {
   return { from, to };
 }
 
-const RANGE_LABELS: Record<TimeRange, string> = {
+const RANGE_LABELS: Record<string, string> = {
   today: 'Today',
   this_week: 'This Week',
   this_month: 'This Month',
+  custom: 'Custom',
+};
+
+const GRANULARITY_LABELS: Record<Granularity, string> = {
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
 };
 
 // ── Component ───────────────────────────────────────────────────────────────
 
 export default function CostsPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>('this_month');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [dimension, setDimension] = useState<Dimension>('project');
+  const [granularity, setGranularity] = useState<Granularity>('daily');
   const [costResponse, setCostResponse] = useState<CostAnalyticsResponse | null>(null);
+  const [trendResponse, setTrendResponse] = useState<CostTrendResponse | null>(null);
+  const [budgetAlerts, setBudgetAlerts] = useState<BudgetAlert[]>([]);
   const [overview, setOverview] = useState<{ totalCost: number; totalSessions: number; totalTokens: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const dateParams = useMemo(
+    () => timeRangeToParams(timeRange, customFrom, customTo),
+    [timeRange, customFrom, customTo],
+  );
+
+  const overviewRange = useMemo(
+    () => timeRange === 'custom' ? 'this month' : timeRange.replace('_', ' '),
+    [timeRange],
+  );
 
   // Fetch overview data
   useEffect(() => {
     let cancelled = false;
     api
-      .getAnalyticsOverview({ range: timeRange.replace('_', ' ') })
-      .then((data) => {
-        if (!cancelled) setOverview(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load overview');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [timeRange]);
+      .getAnalyticsOverview({ range: overviewRange })
+      .then((data) => { if (!cancelled) setOverview(data); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load overview'); });
+    return () => { cancelled = true; };
+  }, [overviewRange]);
 
   // Fetch cost dimension data
   useEffect(() => {
@@ -100,55 +128,90 @@ export default function CostsPage() {
     setLoading(true);
     setError(null);
 
-    const params = timeRangeToParams(timeRange);
-
     api
-      .getAnalyticsCosts({ dimension, ...params })
-      .then((data) => {
-        if (!cancelled) {
-          setCostResponse(data);
-          setLoading(false);
-        }
-      })
+      .getAnalyticsCosts({ dimension, ...dateParams })
+      .then((data) => { if (!cancelled) { setCostResponse(data); setLoading(false); } })
       .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load cost data');
-          setLoading(false);
-        }
+        if (!cancelled) { setError(err instanceof Error ? err.message : 'Failed to load cost data'); setLoading(false); }
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [timeRange, dimension]);
+    return () => { cancelled = true; };
+  }, [dateParams, dimension]);
+
+  // Fetch cost trend data
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getAnalyticsCostTrend({ granularity, ...dateParams })
+      .then((data) => { if (!cancelled) setTrendResponse(data); })
+      .catch(() => { /* trend is non-critical */ });
+    return () => { cancelled = true; };
+  }, [dateParams, granularity]);
+
+  // Fetch budget alerts
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getBudgetAlerts()
+      .then((data) => { if (!cancelled) setBudgetAlerts(data.alerts); })
+      .catch(() => { /* alerts are non-critical */ });
+    return () => { cancelled = true; };
+  }, [dateParams]);
 
   // Derived values
   const costData = costResponse?.breakdown ?? [];
   const totalSpend = overview?.totalCost ?? costResponse?.totalCost ?? 0;
   const totalSessions = overview?.totalSessions ?? 0;
   const avgCostPerSession = totalSessions > 0 ? totalSpend / totalSessions : 0;
-
   const totalTokens = overview?.totalTokens ?? 0;
 
   // Cache metrics from the cost analytics response (server-computed)
   const cacheHitRate = (costResponse?.cacheHitRate ?? 0) * 100;
   const cacheTokensSaved = costResponse?.tokensSaved ?? 0;
-  const costAvoided = cacheTokensSaved * 0.000003; // rough estimate at standard input rate
+  const costAvoided = cacheTokensSaved * 0.000003;
 
-  // Chart data
+  // Most expensive model/session from dimension data
+  const mostExpensiveModel = useMemo(() => {
+    if (!costResponse?.breakdown?.length) return null;
+    // If we happen to have model breakdown cached, use it; otherwise derive from current dimension
+    return costData.length > 0 ? costData[0].name : null;
+  }, [costData, costResponse]);
+
+  // Chart data for dimension breakdown
   const donutData = useMemo(
     () => costData.map((d) => ({ name: d.name, value: d.cost })),
     [costData],
   );
 
   const barData = useMemo(
-    () =>
-      costData.map((d) => ({
-        name: d.name,
-        Cost: d.cost,
-      })),
+    () => costData.map((d) => ({ name: d.name, Cost: d.cost })),
     [costData],
   );
+
+  // Trend chart data — merge current and previous periods into AreaChart format
+  const trendChartData = useMemo(() => {
+    if (!trendResponse) return [];
+    const { current, previous } = trendResponse;
+
+    // Build a unified timeline: use current period dates as the x-axis
+    // Previous period is offset to align with current period by index
+    const allDates = new Set<string>();
+    current.forEach((p) => allDates.add(p.date));
+
+    const currentMap = new Map(current.map((p) => [p.date, p.cost]));
+    const prevArr = [...previous];
+
+    const dates = Array.from(allDates).sort();
+    return dates.map((date, i) => ({
+      date,
+      'Current Period': currentMap.get(date) ?? 0,
+      'Previous Period': prevArr[i]?.cost ?? 0,
+    }));
+  }, [trendResponse]);
+
+  const handleTimeRange = useCallback((key: TimeRange) => {
+    setTimeRange(key);
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -162,24 +225,60 @@ export default function CostsPage() {
         </div>
       </Flex>
 
+      {/* Budget Alert Banners (S10) */}
+      {budgetAlerts.map((alert, idx) => (
+        <Card
+          key={`${alert.type}-${idx}`}
+          className="bg-amber-900/30 ring-amber-600"
+        >
+          <Flex justifyContent="start" alignItems="center" className="gap-3">
+            <Badge color="amber" size="sm">
+              {alert.type === 'daily' ? 'Daily Limit Exceeded' : 'Session Limit Exceeded'}
+            </Badge>
+            <Text className="text-amber-200">
+              {alert.type === 'daily'
+                ? `Daily spending (${usd(alert.actual)}) has exceeded the configured limit of ${usd(alert.limit)}.`
+                : `Session ${alert.sessionId ? alert.sessionId.slice(0, 8) + '...' : ''} cost (${usd(alert.actual)}) has exceeded the per-session limit of ${usd(alert.limit)}.`}
+            </Text>
+          </Flex>
+        </Card>
+      ))}
+
       {/* Time Range Controls */}
       <Card className="bg-gray-800 ring-gray-700">
-        <Flex justifyContent="start" className="gap-2">
-          {(Object.entries(RANGE_LABELS) as [TimeRange, string][]).map(([key, label]) => (
+        <Flex justifyContent="start" className="gap-2 flex-wrap">
+          {(['today', 'this_week', 'this_month', 'custom'] as TimeRange[]).map((key) => (
             <Button
               key={key}
               size="xs"
               variant={timeRange === key ? 'primary' : 'secondary'}
-              onClick={() => setTimeRange(key)}
+              onClick={() => handleTimeRange(key)}
               className={
                 timeRange === key
                   ? 'bg-blue-600 text-white border-blue-600'
                   : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600'
               }
             >
-              {label}
+              {RANGE_LABELS[key]}
             </Button>
           ))}
+          {timeRange === 'custom' && (
+            <Flex className="gap-2 ml-2">
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="bg-gray-700 text-gray-200 border border-gray-600 rounded px-2 py-1 text-sm"
+              />
+              <Text className="text-gray-400 self-center">to</Text>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="bg-gray-700 text-gray-200 border border-gray-600 rounded px-2 py-1 text-sm"
+              />
+            </Flex>
+          )}
         </Flex>
       </Card>
 
@@ -213,11 +312,52 @@ export default function CostsPage() {
         </Card>
 
         <Card className="bg-gray-800 ring-gray-700" decoration="top" decorationColor="amber">
-          <Text className="text-gray-400">Tokens Saved by Cache</Text>
-          <Metric className="text-gray-100">{compactNumber(cacheTokensSaved)}</Metric>
-          <Text className="text-gray-500 text-xs mt-1">{compactNumber(totalTokens)} total</Text>
+          <Text className="text-gray-400">Most Expensive</Text>
+          <Metric className="text-gray-100">{mostExpensiveModel ?? 'N/A'}</Metric>
+          <Text className="text-gray-500 text-xs mt-1">highest spend {dimension}</Text>
         </Card>
       </Grid>
+
+      {/* Cost Trend Over Time (S9) */}
+      <Card className="bg-gray-800 ring-gray-700">
+        <Flex justifyContent="between" alignItems="center" className="mb-4">
+          <Title className="text-gray-100">Cost Trend Over Time</Title>
+          <Flex className="gap-2" justifyContent="end">
+            {(Object.entries(GRANULARITY_LABELS) as [Granularity, string][]).map(([key, label]) => (
+              <Button
+                key={key}
+                size="xs"
+                variant={granularity === key ? 'primary' : 'secondary'}
+                onClick={() => setGranularity(key)}
+                className={
+                  granularity === key
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600'
+                }
+              >
+                {label}
+              </Button>
+            ))}
+          </Flex>
+        </Flex>
+
+        {trendChartData.length === 0 ? (
+          <div className="flex items-center justify-center py-12">
+            <Text className="text-gray-400">No trend data available for this period.</Text>
+          </div>
+        ) : (
+          <AreaChart
+            data={trendChartData}
+            index="date"
+            categories={['Current Period', 'Previous Period']}
+            colors={['blue', 'gray']}
+            valueFormatter={usd}
+            className="h-72"
+            yAxisWidth={65}
+            curveType="monotone"
+          />
+        )}
+      </Card>
 
       {/* Cost by Dimension */}
       <Card className="bg-gray-800 ring-gray-700">
@@ -230,6 +370,7 @@ export default function CostsPage() {
           >
             <SelectItem value="project">By Project</SelectItem>
             <SelectItem value="model">By Model</SelectItem>
+            <SelectItem value="agent">By Agent Name</SelectItem>
           </Select>
         </Flex>
 

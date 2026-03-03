@@ -119,7 +119,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     const fromDate = query.from ?? new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).toISOString();
     const toDate = query.to ?? new Date().toISOString();
 
-    const groupByCol = dimension === 'model' ? 'model' : 'project';
+    const groupByCol = dimension === 'model' ? 'model' : dimension === 'agent' ? 'agent_name' : 'project';
 
     // Cost by dimension
     const result = db.exec(
@@ -162,6 +162,124 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       cacheHitRate,
       tokensSaved: cacheRead,
     };
+  });
+
+  // GET /api/analytics/costs/trend — Cost trend over time with period comparison (Spec 12 ACs 7-12)
+  fastify.get('/api/analytics/costs/trend', async (request) => {
+    const db = (fastify as any).db as Database;
+    const query = request.query as Record<string, string>;
+
+    const granularity = query.granularity ?? 'daily'; // daily | weekly | monthly
+    const fromDate = query.from ?? new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).toISOString();
+    const toDate = query.to ?? new Date().toISOString();
+
+    // Calculate previous period (same duration, immediately before current)
+    const from = new Date(fromDate);
+    const to = new Date(toDate);
+    const durationMs = to.getTime() - from.getTime();
+    const prevFrom = new Date(from.getTime() - durationMs);
+    const prevTo = new Date(from.getTime());
+
+    // Bucket a timestamp into a date key based on granularity
+    function dateKey(isoString: string): string {
+      const d = new Date(isoString);
+      if (granularity === 'monthly') {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      } else if (granularity === 'weekly') {
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(d.getFullYear(), d.getMonth(), diff);
+        return monday.toISOString().slice(0, 10);
+      } else {
+        return d.toISOString().slice(0, 10);
+      }
+    }
+
+    // Query current period
+    const currentResult = db.exec(
+      `SELECT start_time, total_cost FROM sessions
+       WHERE start_time >= ? AND start_time <= ?
+       ORDER BY start_time ASC;`,
+      [fromDate, toDate]
+    );
+
+    const currentMap = new Map<string, number>();
+    if (currentResult.length > 0) {
+      for (const row of currentResult[0].values) {
+        const key = dateKey(row[0] as string);
+        currentMap.set(key, (currentMap.get(key) ?? 0) + (row[1] as number));
+      }
+    }
+
+    // Query previous period
+    const prevResult = db.exec(
+      `SELECT start_time, total_cost FROM sessions
+       WHERE start_time >= ? AND start_time < ?
+       ORDER BY start_time ASC;`,
+      [prevFrom.toISOString(), prevTo.toISOString()]
+    );
+
+    const previousMap = new Map<string, number>();
+    if (prevResult.length > 0) {
+      for (const row of prevResult[0].values) {
+        const key = dateKey(row[0] as string);
+        previousMap.set(key, (previousMap.get(key) ?? 0) + (row[1] as number));
+      }
+    }
+
+    const current = Array.from(currentMap.entries())
+      .map(([date, cost]) => ({ date, cost }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const previous = Array.from(previousMap.entries())
+      .map(([date, cost]) => ({ date, cost }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return { current, previous, granularity };
+  });
+
+  // GET /api/analytics/budget-alerts — Budget threshold violations (Spec 12 ACs 25-30)
+  fastify.get('/api/analytics/budget-alerts', async () => {
+    const db = (fastify as any).db as Database;
+    const config = (fastify as any).config;
+
+    const alerts: Array<{ type: string; limit: number; actual: number; sessionId?: string }> = [];
+
+    const perSessionLimit = config?.alerts?.perSessionCostLimit;
+    const perDayLimit = config?.alerts?.perDayCostLimit;
+
+    // Check per-day limit
+    if (perDayLimit != null && perDayLimit > 0) {
+      const today = new Date();
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+      const result = db.exec(
+        'SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE start_time >= ?;',
+        [todayStart]
+      );
+      const dailyCost = result.length > 0 ? result[0].values[0][0] as number : 0;
+      if (dailyCost > perDayLimit) {
+        alerts.push({ type: 'daily', limit: perDayLimit, actual: dailyCost });
+      }
+    }
+
+    // Check per-session limit
+    if (perSessionLimit != null && perSessionLimit > 0) {
+      const result = db.exec(
+        'SELECT session_id, total_cost FROM sessions WHERE total_cost > ? ORDER BY total_cost DESC;',
+        [perSessionLimit]
+      );
+      if (result.length > 0) {
+        for (const row of result[0].values) {
+          alerts.push({
+            type: 'session',
+            limit: perSessionLimit,
+            actual: row[1] as number,
+            sessionId: row[0] as string,
+          });
+        }
+      }
+    }
+
+    return { alerts };
   });
 
   // GET /api/analytics/errors — Error data from all 3 error sources
