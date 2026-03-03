@@ -83,6 +83,8 @@ export interface Session {
   lastSeen: string; // ISO 8601
   errorCount: number;
   agentName: string | null;
+  subagentCount: number;
+  subagentTasks: string[];
 }
 
 // ── Metrics Types ────────────────────────────────────────────────────────────

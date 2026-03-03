@@ -91,7 +91,8 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
     const allParams = [...params, limit, offset];
     const result = db.exec(
       `SELECT s.session_id, s.project, s.workspace, s.model, s.status, s.start_time, s.end_time,
-              s.total_cost, s.token_counts, s.turn_count, s.inferred_phase, s.last_seen, s.error_count, s.agent_name
+              s.total_cost, s.token_counts, s.turn_count, s.inferred_phase, s.last_seen, s.error_count, s.agent_name,
+              s.subagent_count, s.subagent_tasks
        FROM sessions s ${where}
        ORDER BY s.${sortBy} ${order}
        LIMIT ? OFFSET ?;`,
@@ -113,6 +114,8 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       lastSeen: row[11],
       errorCount: row[12],
       agentName: row[13],
+      subagentCount: row[14] as number,
+      subagentTasks: JSON.parse(row[15] as string || '[]'),
     })) : [];
 
     return { data: sessions, total, page, limit };
@@ -125,7 +128,8 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
 
     const result = db.exec(
       `SELECT session_id, project, workspace, model, status, start_time, end_time,
-              total_cost, token_counts, turn_count, inferred_phase, last_seen, error_count, agent_name
+              total_cost, token_counts, turn_count, inferred_phase, last_seen, error_count, agent_name,
+              subagent_count, subagent_tasks
        FROM sessions WHERE session_id = ?;`,
       [id]
     );
@@ -151,6 +155,8 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       lastSeen: row[11],
       errorCount: row[12],
       agentName: row[13],
+      subagentCount: row[14] as number,
+      subagentTasks: JSON.parse(row[15] as string || '[]'),
     };
 
     // Get metrics if available

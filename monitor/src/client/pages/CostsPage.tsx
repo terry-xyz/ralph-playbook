@@ -102,6 +102,20 @@ export default function CostsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Load default time range from config (Spec 12 AC 32)
+  useEffect(() => {
+    api.getConfig().then((config) => {
+      const configRange = config?.display?.defaultCostRange;
+      if (configRange) {
+        // Map config format ('today'|'this week'|'this month') to internal format
+        const mapped = configRange.replace(' ', '_') as TimeRange;
+        if (['today', 'this_week', 'this_month'].includes(mapped)) {
+          setTimeRange(mapped);
+        }
+      }
+    }).catch(() => { /* non-critical, keep default */ });
+  }, []);
+
   const dateParams = useMemo(
     () => timeRangeToParams(timeRange, customFrom, customTo),
     [timeRange, customFrom, customTo],
@@ -168,7 +182,7 @@ export default function CostsPage() {
   // Cache metrics from the cost analytics response (server-computed)
   const cacheHitRate = (costResponse?.cacheHitRate ?? 0) * 100;
   const cacheTokensSaved = costResponse?.tokensSaved ?? 0;
-  const costAvoided = cacheTokensSaved * 0.000003;
+  const costAvoided = costResponse?.costAvoided ?? 0;
 
   // Most expensive model/session from dimension data
   const mostExpensiveModel = useMemo(() => {

@@ -236,11 +236,29 @@ export function processEvent(db: Database, event: EventRecord): void {
     );
   }
 
-  // Track subagents (G5)
+  // Track subagents (G5) — increment spawn count and capture task description
   if (event.type === 'SubagentStart') {
     db.run(
-      'UPDATE sessions SET turn_count = turn_count + 1 WHERE session_id = ?;',
+      'UPDATE sessions SET turn_count = turn_count + 1, subagent_count = subagent_count + 1 WHERE session_id = ?;',
       [event.sessionId]
+    );
+    // Append task description to subagent_tasks JSON array
+    const taskDesc = (event.payload.description as string)
+      ?? (event.payload.task as string)
+      ?? (event.payload.message as string)
+      ?? 'subagent task';
+    const existing = db.exec(
+      'SELECT subagent_tasks FROM sessions WHERE session_id = ?;',
+      [event.sessionId]
+    );
+    let tasks: string[] = [];
+    if (existing.length > 0 && existing[0].values.length > 0) {
+      try { tasks = JSON.parse(existing[0].values[0][0] as string || '[]'); } catch { /* use empty */ }
+    }
+    tasks.push(taskDesc);
+    db.run(
+      'UPDATE sessions SET subagent_tasks = ? WHERE session_id = ?;',
+      [JSON.stringify(tasks), event.sessionId]
     );
   }
 

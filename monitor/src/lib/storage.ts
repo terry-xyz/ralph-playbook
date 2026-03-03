@@ -30,7 +30,9 @@ const SCHEMA_DDL = `
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
     error_count INTEGER NOT NULL DEFAULT 0,
-    agent_name TEXT
+    agent_name TEXT,
+    subagent_count INTEGER NOT NULL DEFAULT 0,
+    subagent_tasks TEXT NOT NULL DEFAULT '[]'
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -133,6 +135,12 @@ export class Storage {
       const columns = result[0].values.map((row: unknown[]) => row[1] as string);
       if (!columns.includes('agent_name')) {
         db.run('ALTER TABLE sessions ADD COLUMN agent_name TEXT;');
+      }
+      if (!columns.includes('subagent_count')) {
+        db.run('ALTER TABLE sessions ADD COLUMN subagent_count INTEGER NOT NULL DEFAULT 0;');
+      }
+      if (!columns.includes('subagent_tasks')) {
+        db.run("ALTER TABLE sessions ADD COLUMN subagent_tasks TEXT NOT NULL DEFAULT '[]';");
       }
     }
   }

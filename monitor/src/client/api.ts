@@ -75,6 +75,11 @@ export interface PaginatedResponse<T> {
   limit: number;
 }
 
+export interface ToolCallsPerMinPoint {
+  timestamp: string;
+  count: number;
+}
+
 export interface AnalyticsOverview {
   activeSessions: number;
   totalSessions: number;
@@ -83,7 +88,7 @@ export interface AnalyticsOverview {
   totalErrors: number;
   errorRate: number;
   rateLimitIncidents: number;
-  toolCallsPerMin: number[];
+  toolCallsPerMin: ToolCallsPerMinPoint[];
 }
 
 export interface CostDimension {
@@ -96,6 +101,7 @@ export interface CostAnalyticsResponse {
   totalCost: number;
   cacheHitRate: number;
   tokensSaved: number;
+  costAvoided: number;
 }
 
 export interface CostTrendPoint {

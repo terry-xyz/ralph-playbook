@@ -86,16 +86,19 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     );
     const rateLimitIncidents = rateLimitResult.length > 0 ? rateLimitResult[0].values[0][0] as number : 0;
 
-    // Tool calls per minute (last 10 minutes as time series)
-    const toolCallsPerMin: number[] = [];
+    // Tool calls per minute (last 10 minutes as time series of {timestamp, count} pairs per Spec 06)
+    const toolCallsPerMin: { timestamp: string; count: number }[] = [];
     for (let i = 9; i >= 0; i--) {
-      const start = new Date(Date.now() - (i + 1) * 60000).toISOString();
-      const end = new Date(Date.now() - i * 60000).toISOString();
+      const start = new Date(Date.now() - (i + 1) * 60000);
+      const end = new Date(Date.now() - i * 60000);
       const result = db.exec(
         "SELECT COUNT(*) FROM events WHERE type IN ('PreToolUse', 'PostToolUse') AND timestamp >= ? AND timestamp < ?;",
-        [start, end]
+        [start.toISOString(), end.toISOString()]
       );
-      toolCallsPerMin.push(result.length > 0 ? result[0].values[0][0] as number : 0);
+      toolCallsPerMin.push({
+        timestamp: start.toISOString(),
+        count: result.length > 0 ? result[0].values[0][0] as number : 0,
+      });
     }
 
     return {
@@ -137,21 +140,35 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
 
     const totalCost = breakdown.reduce((sum: number, b: { name: unknown; cost: number }) => sum + b.cost, 0);
 
-    // Cache efficiency from metrics
+    // Cache efficiency from metrics — per-model pricing for accurate cost-avoided (Spec 12 ACs 21, 24)
     const cacheResult = db.exec(
-      `SELECT token_breakdown FROM metrics m
+      `SELECT m.token_breakdown, m.model FROM metrics m
        JOIN sessions s ON m.session_id = s.session_id
        WHERE s.start_time >= ? AND s.start_time <= ?;`,
       [fromDate, toDate]
     );
 
+    const config = (fastify as any).config;
+    const pricing = config?.pricing ?? {};
+
     let cacheRead = 0;
     let totalInput = 0;
+    let costAvoided = 0;
     if (cacheResult.length > 0) {
       for (const row of cacheResult[0].values) {
         const tokens = JSON.parse(row[0] as string || '{}');
-        cacheRead += tokens.cacheRead ?? 0;
-        totalInput += (tokens.input ?? 0) + (tokens.cacheRead ?? 0);
+        const model = row[1] as string || '';
+        const sessionCacheRead = tokens.cacheRead ?? 0;
+        cacheRead += sessionCacheRead;
+        totalInput += (tokens.input ?? 0) + sessionCacheRead;
+
+        // Per-model cost avoided: difference between standard input pricing and cache-read pricing
+        const modelPricing = pricing[model];
+        if (modelPricing && sessionCacheRead > 0) {
+          const inputRate = modelPricing.inputPer1k ?? 0;
+          const cacheReadRate = modelPricing.cacheReadPer1k ?? 0;
+          costAvoided += sessionCacheRead * (inputRate - cacheReadRate) / 1000;
+        }
       }
     }
     const cacheHitRate = totalInput > 0 ? cacheRead / totalInput : 0;
@@ -161,6 +178,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       totalCost,
       cacheHitRate,
       tokensSaved: cacheRead,
+      costAvoided,
     };
   });
 

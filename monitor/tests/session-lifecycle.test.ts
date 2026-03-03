@@ -395,6 +395,60 @@ describe('G5 — Subagent tracking', () => {
     const turnCount = getSessionField(db, 's-1', 'turn_count');
     expect(turnCount).toBeGreaterThanOrEqual(1);
   });
+
+  it('should increment subagent_count on SubagentStart (Spec 05 AC 11)', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({ sessionId: 's-1' }));
+    processEvent(db, makeEvent({
+      sessionId: 's-1',
+      type: 'SubagentStart',
+      payload: { description: 'search for files' },
+    }));
+    processEvent(db, makeEvent({
+      sessionId: 's-1',
+      type: 'SubagentStart',
+      payload: { description: 'run tests' },
+    }));
+
+    const subagentCount = getSessionField(db, 's-1', 'subagent_count');
+    expect(subagentCount).toBe(2);
+  });
+
+  it('should track subagent task descriptions (Spec 05 AC 12)', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({ sessionId: 's-1' }));
+    processEvent(db, makeEvent({
+      sessionId: 's-1',
+      type: 'SubagentStart',
+      payload: { description: 'explore codebase' },
+    }));
+    processEvent(db, makeEvent({
+      sessionId: 's-1',
+      type: 'SubagentStart',
+      payload: { task: 'run integration tests' },
+    }));
+
+    const tasksJson = getSessionField(db, 's-1', 'subagent_tasks') as string;
+    const tasks = JSON.parse(tasksJson);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toBe('explore codebase');
+    expect(tasks[1]).toBe('run integration tests');
+  });
+
+  it('should use fallback task description when no description/task in payload', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({ sessionId: 's-1' }));
+    processEvent(db, makeEvent({
+      sessionId: 's-1',
+      type: 'SubagentStart',
+      payload: {},
+    }));
+
+    const tasksJson = getSessionField(db, 's-1', 'subagent_tasks') as string;
+    const tasks = JSON.parse(tasksJson);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toBe('subagent task');
+  });
 });
 
 // ── G6: Error Categorization ─────────────────────────────────────────────────

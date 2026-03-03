@@ -44,7 +44,9 @@ const SCHEMA_DDL = `
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
     error_count INTEGER NOT NULL DEFAULT 0,
-    agent_name TEXT
+    agent_name TEXT,
+    subagent_count INTEGER NOT NULL DEFAULT 0,
+    subagent_tasks TEXT NOT NULL DEFAULT '[]'
   );
 
   CREATE TABLE IF NOT EXISTS events (

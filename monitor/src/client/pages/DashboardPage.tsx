@@ -185,6 +185,14 @@ function SessionCard({ session, onClick }: { session: Session; onClick?: () => v
           </div>
         )}
 
+        {/* Subagent count */}
+        {session.subagentCount > 0 && (
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Subagents</span>
+            <span className="text-purple-400">{session.subagentCount}</span>
+          </div>
+        )}
+
         {/* Error count */}
         {session.errorCount > 0 && (
           <div className="flex justify-between text-xs">
@@ -339,25 +347,36 @@ export default function DashboardPage() {
     return groups;
   }, [filteredSessions]);
 
-  // Tool calls per minute sparkline data (last 10 minutes, one data point per minute)
+  // Tool calls per minute sparkline: seed from server data, overlay with live WS events
   const toolCallSparkline = useMemo(() => {
     const now = Date.now();
     const data: { minute: string; calls: number }[] = [];
+    const serverData = overview?.toolCallsPerMin ?? [];
+
     for (let i = 9; i >= 0; i--) {
       const minuteStart = now - (i + 1) * 60_000;
       const minuteEnd = now - i * 60_000;
-      const count = toolCallTimestamps.filter(
+      // Count from live WS-tracked timestamps for this bucket
+      const liveCount = toolCallTimestamps.filter(
         (t) => t >= minuteStart && t < minuteEnd,
       ).length;
-      data.push({ minute: `${10 - i}`, calls: count });
+      // Use server data as baseline, augmented by any live events
+      const serverPoint = serverData[9 - i];
+      const serverCount = serverPoint?.count ?? 0;
+      // Use whichever is higher — server data for historical, live for recent
+      data.push({ minute: `${10 - i}`, calls: Math.max(serverCount, liveCount) });
     }
     return data;
-  }, [toolCallTimestamps]);
+  }, [toolCallTimestamps, overview?.toolCallsPerMin]);
 
   const currentToolCallsPerMin = useMemo(() => {
     const oneMinuteAgo = Date.now() - 60_000;
-    return toolCallTimestamps.filter((t) => t > oneMinuteAgo).length;
-  }, [toolCallTimestamps]);
+    const liveCount = toolCallTimestamps.filter((t) => t > oneMinuteAgo).length;
+    // Use server's most recent bucket if no live data yet
+    const serverData = overview?.toolCallsPerMin ?? [];
+    const lastServerBucket = serverData.length > 0 ? serverData[serverData.length - 1].count : 0;
+    return Math.max(liveCount, lastServerBucket);
+  }, [toolCallTimestamps, overview?.toolCallsPerMin]);
 
   const totalErrors = overview?.totalErrors ?? 0;
   const totalSessions = overview?.totalSessions ?? 0;

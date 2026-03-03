@@ -36,7 +36,9 @@ const SCHEMA_DDL = `
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
     error_count INTEGER NOT NULL DEFAULT 0,
-    agent_name TEXT
+    agent_name TEXT,
+    subagent_count INTEGER NOT NULL DEFAULT 0,
+    subagent_tasks TEXT NOT NULL DEFAULT '[]'
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -1782,6 +1784,145 @@ describe('S29 — Tool filter and sort on /api/analytics/errors', () => {
     expect(body.data[0].timestamp).toBe('2026-01-01T03:00:00Z');
     expect(body.data[1].timestamp).toBe('2026-01-01T02:00:00Z');
     expect(body.data[2].timestamp).toBe('2026-01-01T01:00:00Z');
+  });
+});
+
+// ── S24 — toolCallsPerMin returns (timestamp, count) pairs ──────────────────
+
+describe('S24 — toolCallsPerMin format', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return toolCallsPerMin as array of {timestamp, count} objects', async () => {
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/overview' });
+    const body = JSON.parse(res.body);
+    expect(body.toolCallsPerMin).toHaveLength(10);
+    for (const point of body.toolCallsPerMin) {
+      expect(point).toHaveProperty('timestamp');
+      expect(point).toHaveProperty('count');
+      expect(typeof point.timestamp).toBe('string');
+      expect(typeof point.count).toBe('number');
+    }
+  });
+
+  it('should count tool calls in the correct time buckets', async () => {
+    const now = Date.now();
+    seedSession('s1', { status: 'running', startTime: new Date(now - 600000).toISOString() });
+    // Place tool calls 2 minutes ago
+    const twoMinAgo = new Date(now - 120000).toISOString();
+    seedEvent('tc1', 's1', { type: 'PreToolUse', timestamp: twoMinAgo });
+    seedEvent('tc2', 's1', { type: 'PostToolUse', timestamp: twoMinAgo });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/overview' });
+    const body = JSON.parse(res.body);
+    // At least one bucket should have > 0
+    const totalCalls = body.toolCallsPerMin.reduce((sum: number, p: { count: number }) => sum + p.count, 0);
+    expect(totalCalls).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ── S23 — Cost avoided with per-model pricing ──────────────────────────────
+
+describe('S23 — Cost avoided calculation', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return costAvoided in cost analytics response', async () => {
+    const now = new Date().toISOString();
+    seedSession('s1', { startTime: now, model: 'claude-sonnet-4-20250514' });
+    seedMetrics('s1', {
+      tokenBreakdown: { input: 1000, output: 500, cacheCreation: 200, cacheRead: 800 },
+      model: 'claude-sonnet-4-20250514',
+    });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/costs' });
+    const body = JSON.parse(res.body);
+    expect(body).toHaveProperty('costAvoided');
+    expect(typeof body.costAvoided).toBe('number');
+    // For Sonnet 4: costAvoided = 800 * (0.003 - 0.0003) / 1000 = 0.00216
+    expect(body.costAvoided).toBeCloseTo(0.00216, 4);
+  });
+
+  it('should compute per-model cost avoided for different models', async () => {
+    const now = new Date().toISOString();
+    seedSession('s1', { startTime: now, model: 'claude-sonnet-4-20250514' });
+    seedMetrics('s1', {
+      tokenBreakdown: { input: 500, output: 200, cacheCreation: 0, cacheRead: 500 },
+      model: 'claude-sonnet-4-20250514',
+    });
+    seedSession('s2', { startTime: now, model: 'claude-opus-4-20250514' });
+    seedMetrics('s2', {
+      tokenBreakdown: { input: 500, output: 200, cacheCreation: 0, cacheRead: 500 },
+      model: 'claude-opus-4-20250514',
+    });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/costs' });
+    const body = JSON.parse(res.body);
+    // Sonnet: 500 * (0.003 - 0.0003) / 1000 = 0.00135
+    // Opus:   500 * (0.015 - 0.0015) / 1000 = 0.00675
+    // Total: 0.0081
+    expect(body.costAvoided).toBeCloseTo(0.0081, 4);
+  });
+
+  it('should return zero costAvoided when no cache reads exist', async () => {
+    const now = new Date().toISOString();
+    seedSession('s1', { startTime: now });
+    seedMetrics('s1', { tokenBreakdown: { input: 1000, output: 500, cacheCreation: 0, cacheRead: 0 } });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/costs' });
+    const body = JSON.parse(res.body);
+    expect(body.costAvoided).toBe(0);
+  });
+});
+
+// ── S20 — Subagent tracking in session API ──────────────────────────────────
+
+describe('S20 — Subagent tracking in API', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return subagentCount and subagentTasks in session list', async () => {
+    db.run(`
+      INSERT INTO sessions (session_id, project, workspace, status, start_time, last_seen, subagent_count, subagent_tasks)
+      VALUES ('s1', 'test', '/test', 'running', ?, ?, 3, ?);
+    `, [new Date().toISOString(), new Date().toISOString(), JSON.stringify(['task1', 'task2', 'task3'])]);
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions' });
+    const body = JSON.parse(res.body);
+    expect(body.data[0].subagentCount).toBe(3);
+    expect(body.data[0].subagentTasks).toEqual(['task1', 'task2', 'task3']);
+  });
+
+  it('should return subagentCount and subagentTasks in session detail', async () => {
+    db.run(`
+      INSERT INTO sessions (session_id, project, workspace, status, start_time, last_seen, subagent_count, subagent_tasks)
+      VALUES ('s1', 'test', '/test', 'running', ?, ?, 2, ?);
+    `, [new Date().toISOString(), new Date().toISOString(), JSON.stringify(['explore', 'test'])]);
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions/s1' });
+    const body = JSON.parse(res.body);
+    expect(body.session.subagentCount).toBe(2);
+    expect(body.session.subagentTasks).toEqual(['explore', 'test']);
+  });
+
+  it('should default subagent fields to 0 and empty array', async () => {
+    seedSession('s1');
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions/s1' });
+    const body = JSON.parse(res.body);
+    expect(body.session.subagentCount).toBe(0);
+    expect(body.session.subagentTasks).toEqual([]);
   });
 });
 

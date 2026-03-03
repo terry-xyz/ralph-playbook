@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S22/S27/S28/S29. 310 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S20/S22/S23/S24/S27/S28/S29/S30. 321 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -54,17 +54,17 @@
 - [x] **S17** — Scraper integrated into ingestion pipeline (Spec 02/03): `insertBatch()` now collects sessions with Stop/SessionEnd events and fire-and-forget calls `scrapeSession()` after COMMIT; config threaded through `processFile`, `processAllFiles`, and `Ingester` class; 7 backend tests
 - [ ] **S18** — Ingester daemon process missing (Spec 02): No lock file, detached process, signal handling
 - [ ] **S19** — Project collision disambiguation (Spec 01 AC 23, Spec 05 AC 7): No hash-based disambiguation
-- [ ] **S20** — Subagent tracking metadata on parent session (Spec 05 ACs 11-12): Only turn_count incremented, no spawn count/tasks
+- [x] **S20** — Subagent tracking metadata on parent session (Spec 05 ACs 11-12): Added `subagent_count` and `subagent_tasks` columns to sessions table with migration; `processEvent()` increments spawn count and captures task descriptions on SubagentStart; API returns new fields in session list and detail; session card displays subagent count; 4 backend tests
 - [ ] **S21** — WebSocket resume may produce duplicates on same-timestamp events (Spec 06)
 - [x] **S22** — Error analytics category filter is client-side, breaks pagination (Spec 06): Category filter moved server-side; query fetches all matching errors, categorizes/filters/sorts in server JS, then paginates — total count is now accurate across all pages; tool filter also added to SQL WHERE; server-side sort by timestamp/category/project; 4 backend tests
-- [ ] **S23** — Cost analytics endpoint missing "estimated cost avoided" (Spec 06)
-- [ ] **S24** — Top stats toolCallsPerMin returns numbers not (timestamp, count) pairs (Spec 06)
+- [x] **S23** — Cost analytics endpoint "estimated cost avoided" (Spec 12 AC 21): Server-side per-model cost avoided calculation using (inputPer1k - cacheReadPer1k) rate difference; API returns `costAvoided` in costs response; CostsPage uses server value instead of hardcoded rate; 3 backend tests
+- [x] **S24** — Top stats toolCallsPerMin returns (timestamp, count) pairs (Spec 06): Changed from `number[]` to `{timestamp, count}[]` format; DashboardPage seeds sparkline from server data on load and merges with live WS events; 2 backend tests
 - [ ] **S25** — No Fastify schema validation on any API endpoint (Spec 06)
 - [ ] **S26** — Multiple model tracking stores only last model (Spec 03 AC 2)
 - [x] **S27** — Scraped errors persisted to database (Spec 03 AC 6): Added `ScrapedError` event type; `scrapeSession()` now inserts extracted errors into events table with pre-classified categories, increments session `error_count`; analytics error endpoints (list, trend, rate-limits) updated to include ScrapedError; 4 backend tests
 - [x] **S28** — Session detail enhancements (Spec 10 ACs 26-29, 36): Fixed `api.getSession()` to properly unwrap `{session, metrics, tools}` envelope; exact cost breakdown from metrics; expandable tool entries showing individual call inputs/outputs (AC 26); token usage BarChart (ACs 27-28); AC 36 (auto-refresh) was already implemented; fixed events endpoint to return `{data}` with correct field names matching `EventRecord` type
 - [x] **S29** — ErrorsPage missing: tool filter (Spec 13 AC 5), live updates (AC 29): Added tool filter TextInput + API param + SQL WHERE condition (AC 5); WebSocket live updates via useWebSocket hook with debounced re-fetch on error events (AC 29); 5 backend tests
-- [ ] **S30** — CostsPage: default time range not from config (Spec 12 AC 32), cost-avoided uses hardcoded rate (AC 21)
+- [x] **S30** — CostsPage: default time range from config (Spec 12 AC 32), cost-avoided uses server-computed rate (AC 21): CostsPage loads config on mount and initializes time range from `display.defaultCostRange`; cost avoided now uses server-computed per-model value
 - [ ] **S31** — CLI wizard: 11 ACs untested (Spec 15 ACs 2,5-9,11-13,15-16)
 
 ---
