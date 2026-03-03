@@ -16,7 +16,7 @@ import path from 'node:path';
 import type { Database } from 'sql.js';
 import type { EventRecord, Config } from '@shared/types.js';
 import { isValidEventType } from '@shared/event-names.js';
-import { processEvent, categorizeError, detectStaleSessions } from './session-lifecycle.js';
+import { processEvent, detectStaleSessions } from './session-lifecycle.js';
 import { scrapeSession } from './scraper.js';
 
 // ── Position Tracking (E1) ───────────────────────────────────────────────────
@@ -319,7 +319,6 @@ export class Ingester {
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private staleCheckHandle: ReturnType<typeof setInterval> | null = null;
   private watcher: any = null; // chokidar watcher
-  private pendingEvents: EventRecord[] = [];
 
   constructor(
     db: Database,

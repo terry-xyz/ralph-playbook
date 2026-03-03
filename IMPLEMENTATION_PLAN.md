@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S20/S22/S23/S24/S26/S27/S28/S29/S30. 325 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S18/S20/S22/S23/S24/S26/S27/S28/S29/S30. 353 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -52,7 +52,7 @@
 - [x] **S11** — Error rate time-series chart (Spec 13 ACs 18-21): Added `GET /api/analytics/errors/trend` endpoint with adaptive bucket sizing, stacked AreaChart by error category, session start/stop overlays, filter support; 5 backend tests
 - [x] **S12** — Rate limit sub-view on Errors page (Spec 13 ACs 22-26): Added `GET /api/analytics/errors/rate-limits` endpoint with frequency, model attribution, and cooldown pattern detection; toggle between Error Log and Rate Limits views; AreaChart frequency, BarChart by model, cooldown table; 5 backend tests
 - [x] **S17** — Scraper integrated into ingestion pipeline (Spec 02/03): `insertBatch()` now collects sessions with Stop/SessionEnd events and fire-and-forget calls `scrapeSession()` after COMMIT; config threaded through `processFile`, `processAllFiles`, and `Ingester` class; 7 backend tests
-- [ ] **S18** — Ingester daemon process missing (Spec 02): No lock file, detached process, signal handling
+- [x] **S18** — Ingester daemon process (Spec 02): Created `ingester-daemon.ts` entry point with lock file write/remove, SIGINT/SIGTERM signal handling, periodic DB flush, single-instance guard; extracted shared `lock-file.ts` utilities (isPidAlive, readLockPid, isIngesterRunning, writeLock, removeLock); fixed `createServer()` to call `ingester.start()`; removed dead `pendingEvents` field and unused `categorizeError` import; 28 new tests covering lock file operations, Ingester class lifecycle, stale detection, error isolation; 353 tests passing
 - [ ] **S19** — Project collision disambiguation (Spec 01 AC 23, Spec 05 AC 7): No hash-based disambiguation
 - [x] **S20** — Subagent tracking metadata on parent session (Spec 05 ACs 11-12): Added `subagent_count` and `subagent_tasks` columns to sessions table with migration; `processEvent()` increments spawn count and captures task descriptions on SubagentStart; API returns new fields in session list and detail; session card displays subagent count; 4 backend tests
 - [ ] **S21** — WebSocket resume may produce duplicates on same-timestamp events (Spec 06)

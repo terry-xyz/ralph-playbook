@@ -86,6 +86,12 @@ function isIngesterRunning(lockPath: string): boolean {
   }
 }
 
+// NOTE: isPidAlive and isIngesterRunning are duplicated here (rather than
+// importing from lock-file.ts) because hook scripts must be self-contained
+// and avoid importing from the server module graph, which pulls in heavy
+// dependencies like sql.js. The canonical implementations live in
+// src/server/lock-file.ts for use by the daemon and server.
+
 /** Spawn ingester daemon if not already running. */
 function ensureIngester(monitorRoot: string, lockPath: string): void {
   if (isIngesterRunning(lockPath)) return;

@@ -54,6 +54,7 @@ export async function createServer(monitorRoot?: string) {
     staleTimeoutMinutes: config.general.staleTimeoutMinutes,
     config,
   });
+  await ingester.start();
 
   // Create Fastify instance
   const fastify = Fastify({
