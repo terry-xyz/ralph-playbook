@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Card,
   Metric,
@@ -120,11 +121,14 @@ function LiveDuration({ startTime }: { startTime: string }) {
 
 // ── Session Card ─────────────────────────────────────────────────────────────
 
-function SessionCard({ session }: { session: Session }) {
+function SessionCard({ session, onClick }: { session: Session; onClick?: () => void }) {
   const isRunning = session.status === 'running';
 
   return (
-    <Card className="bg-gray-800/60 ring-gray-700/50 p-3 hover:ring-gray-600 transition-all cursor-default">
+    <Card
+      className="bg-gray-800/60 ring-gray-700/50 p-3 hover:ring-gray-600 transition-all cursor-pointer hover:bg-gray-800/80"
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-2 mb-2">
         <Text className="text-gray-200 font-mono text-xs">
           {truncateId(session.sessionId)}
@@ -216,6 +220,8 @@ function KpiCard({
 // ── Main Dashboard Page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
+
   // ── State ────────────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState<Session[]>([]);
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
@@ -536,6 +542,7 @@ export default function DashboardPage() {
                               <SessionCard
                                 key={session.sessionId}
                                 session={session}
+                                onClick={() => navigate(`/sessions/${session.sessionId}`)}
                               />
                             ))}
                         </div>

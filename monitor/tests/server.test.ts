@@ -548,6 +548,136 @@ describe('H4 — Config API', () => {
     // Fastify may parse string as JSON, resulting in non-object
     expect(res.statusCode).toBe(400);
   });
+
+  it('PATCH /api/config should update and return config (client compatibility)', async () => {
+    const res = await fastify.inject({
+      method: 'PATCH',
+      url: '/api/config',
+      headers: { 'Content-Type': 'application/json' },
+      payload: { display: { theme: 'light' } },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.display.theme).toBe('light');
+
+    // Verify persistence via GET
+    const getRes = await fastify.inject({ method: 'GET', url: '/api/config' });
+    const getBody = JSON.parse(getRes.body);
+    expect(getBody.display.theme).toBe('light');
+  });
+
+  it('PATCH /api/config should reject non-object body', async () => {
+    const res = await fastify.inject({
+      method: 'PATCH',
+      url: '/api/config',
+      headers: { 'Content-Type': 'application/json' },
+      payload: 'not an object',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/config should include default guardrail rules (Spec 14 AC 16-18)', async () => {
+    const res = await fastify.inject({ method: 'GET', url: '/api/config' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+
+    expect(body.guardrails).toBeDefined();
+    expect(body.guardrails.dangerous_command_blocker).toBeDefined();
+    expect(body.guardrails.dangerous_command_blocker.mode).toBe('block');
+    expect(body.guardrails.sensitive_file_blocker).toBeDefined();
+    expect(body.guardrails.sensitive_file_blocker.mode).toBe('block');
+    expect(body.guardrails.cost_guardrail).toBeDefined();
+    expect(body.guardrails.cost_guardrail.mode).toBe('warn');
+    expect(body.guardrails.long_chain_detection.mode).toBe('warn');
+    expect(body.guardrails.rate_limit_throttle.mode).toBe('warn');
+    expect(body.guardrails.quality_gate.mode).toBe('warn');
+  });
+
+  it('PATCH /api/config should update guardrail modes', async () => {
+    const res = await fastify.inject({
+      method: 'PATCH',
+      url: '/api/config',
+      headers: { 'Content-Type': 'application/json' },
+      payload: {
+        guardrails: {
+          dangerous_command_blocker: { mode: 'warn' },
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.guardrails.dangerous_command_blocker.mode).toBe('warn');
+  });
+});
+
+// ── Data Purge API ───────────────────────────────────────────────────────────
+
+describe('S3 — POST /api/data/purge', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should purge data older than retention period (Spec 14 AC 36)', async () => {
+    const oldDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 days ago
+    const newDate = new Date().toISOString();
+
+    // Seed old session + events
+    seedSession('old-session', { startTime: oldDate, status: 'completed', endTime: oldDate });
+    seedEvent('old-event', 'old-session', { timestamp: oldDate });
+
+    // Seed new session + events
+    seedSession('new-session', { startTime: newDate });
+    seedEvent('new-event', 'new-session', { timestamp: newDate });
+
+    const res = await fastify.inject({ method: 'POST', url: '/api/data/purge' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(true);
+    expect(body.retentionDays).toBe(30); // default
+
+    // Old data should be purged
+    const sessionsRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
+    const sessionsBody = JSON.parse(sessionsRes.body);
+    expect(sessionsBody.sessions).toHaveLength(1);
+    expect(sessionsBody.sessions[0].sessionId).toBe('new-session');
+  });
+
+  it('should not purge data within retention period', async () => {
+    const recentDate = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(); // 5 days ago
+    seedSession('recent-session', { startTime: recentDate });
+    seedEvent('recent-event', 'recent-session', { timestamp: recentDate });
+
+    const res = await fastify.inject({ method: 'POST', url: '/api/data/purge' });
+    expect(res.statusCode).toBe(200);
+
+    const sessionsRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
+    const sessionsBody = JSON.parse(sessionsRes.body);
+    expect(sessionsBody.sessions).toHaveLength(1);
+  });
+
+  it('should purge orphaned metrics when sessions are purged', async () => {
+    const oldDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    seedSession('old-session', { startTime: oldDate, status: 'completed', endTime: oldDate });
+    seedMetrics('old-session');
+
+    const res = await fastify.inject({ method: 'POST', url: '/api/data/purge' });
+    expect(res.statusCode).toBe(200);
+
+    // Verify metrics are also purged
+    const metricsResult = db.exec("SELECT COUNT(*) as cnt FROM metrics");
+    expect(metricsResult[0].values[0][0]).toBe(0);
+  });
+
+  it('should return cutoff date in response', async () => {
+    const res = await fastify.inject({ method: 'POST', url: '/api/data/purge' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.cutoffDate).toBeDefined();
+    expect(new Date(body.cutoffDate).getTime()).toBeLessThan(Date.now());
+  });
 });
 
 // ── H5 — Search API ─────────────────────────────────────────────────────────

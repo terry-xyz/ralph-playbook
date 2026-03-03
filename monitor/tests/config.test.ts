@@ -195,6 +195,73 @@ describe('B1 — Config file loader', () => {
     expect(config.alerts.perSessionCostLimit).toBeNull();
     expect(config.alerts.perDayCostLimit).toBeNull();
   });
+
+  it('should have default guardrail rules with correct modes (Spec 14 AC 16-18)', () => {
+    const config = loadConfig(configPath);
+
+    // AC 16: dangerous command blocker defaults to 'block'
+    expect(config.guardrails.dangerous_command_blocker).toBeDefined();
+    expect(config.guardrails.dangerous_command_blocker.mode).toBe('block');
+    expect(config.guardrails.dangerous_command_blocker.patterns).toBeDefined();
+    expect(Array.isArray(config.guardrails.dangerous_command_blocker.patterns)).toBe(true);
+
+    // AC 17: sensitive file blocker defaults to 'block'
+    expect(config.guardrails.sensitive_file_blocker).toBeDefined();
+    expect(config.guardrails.sensitive_file_blocker.mode).toBe('block');
+    expect(config.guardrails.sensitive_file_blocker.paths).toBeDefined();
+    expect(Array.isArray(config.guardrails.sensitive_file_blocker.paths)).toBe(true);
+
+    // AC 18: cost guardrail, long chain detection, rate limit throttle, quality gate default to 'warn'
+    expect(config.guardrails.cost_guardrail).toBeDefined();
+    expect(config.guardrails.cost_guardrail.mode).toBe('warn');
+    expect(config.guardrails.cost_guardrail.costLimit).toBeDefined();
+    expect(typeof config.guardrails.cost_guardrail.costLimit).toBe('number');
+
+    expect(config.guardrails.long_chain_detection).toBeDefined();
+    expect(config.guardrails.long_chain_detection.mode).toBe('warn');
+    expect(config.guardrails.long_chain_detection.chainLimit).toBeDefined();
+
+    expect(config.guardrails.rate_limit_throttle).toBeDefined();
+    expect(config.guardrails.rate_limit_throttle.mode).toBe('warn');
+    expect(config.guardrails.rate_limit_throttle.delayMs).toBeDefined();
+
+    expect(config.guardrails.quality_gate).toBeDefined();
+    expect(config.guardrails.quality_gate.mode).toBe('warn');
+  });
+
+  it('should have exactly 6 default guardrail rules', () => {
+    const config = loadConfig(configPath);
+    expect(Object.keys(config.guardrails)).toHaveLength(6);
+  });
+
+  it('should merge user guardrail overrides with defaults (Spec 14 AC 28-30)', () => {
+    // User overrides one guardrail's mode
+    const partial = {
+      guardrails: {
+        dangerous_command_blocker: { mode: 'off' },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(partial), 'utf-8');
+    const config = loadConfig(configPath);
+
+    // User override applied
+    expect(config.guardrails.dangerous_command_blocker.mode).toBe('off');
+    // Other defaults still present
+    expect(config.guardrails.sensitive_file_blocker.mode).toBe('block');
+    expect(config.guardrails.cost_guardrail.mode).toBe('warn');
+  });
+
+  it('should validate guardrail mode values (Spec 14 AC 51)', () => {
+    const partial = {
+      guardrails: {
+        test_rule: { mode: 'invalid_mode' },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(partial), 'utf-8');
+    const config = loadConfig(configPath);
+    // Invalid mode should fall back to 'off'
+    expect(config.guardrails.test_rule.mode).toBe('off');
+  });
 });
 
 describe('B2 — Config writer', () => {

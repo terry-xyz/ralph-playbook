@@ -180,4 +180,8 @@ export const api = {
   }): Promise<PaginatedResponse<GuardrailLogEntry>> {
     return request(`/api/guardrails/log${qs(params)}`);
   },
+
+  purgeData(): Promise<{ success: boolean; retentionDays: number; cutoffDate: string }> {
+    return request('/api/data/purge', { method: 'POST' });
+  },
 };

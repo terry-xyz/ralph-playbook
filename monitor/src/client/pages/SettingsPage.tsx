@@ -15,7 +15,7 @@ import {
   Callout,
 } from '@tremor/react';
 import { api } from '../api';
-import type { Config } from '@shared/types';
+import type { Config, GuardrailAction, GuardrailRuleConfig } from '@shared/types';
 import { DEFAULT_CONFIG } from '@shared/constants';
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -28,6 +28,41 @@ interface Toast {
   message: string;
   type: 'success' | 'error';
 }
+
+// ── Guardrail display metadata ──────────────────────────────────────────────
+
+const GUARDRAIL_LABELS: Record<string, { name: string; description: string }> = {
+  dangerous_command_blocker: {
+    name: 'Dangerous Command Blocker',
+    description: 'Prevents execution of destructive shell commands',
+  },
+  sensitive_file_blocker: {
+    name: 'Sensitive File Blocker',
+    description: 'Prevents access to sensitive files (.env, credentials, keys)',
+  },
+  cost_guardrail: {
+    name: 'Cost Guardrail',
+    description: 'Warns or blocks when session cost exceeds a threshold',
+  },
+  long_chain_detection: {
+    name: 'Long Chain Detection',
+    description: 'Detects when an agent runs for an unusually high number of turns',
+  },
+  rate_limit_throttle: {
+    name: 'Rate Limit Throttle',
+    description: 'Adds delays when rate limits are being hit frequently',
+  },
+  quality_gate: {
+    name: 'Quality Gate',
+    description: 'Checks code quality before allowing commits',
+  },
+};
+
+const GUARDRAIL_MODE_OPTIONS: { value: GuardrailAction; label: string; color: string }[] = [
+  { value: 'block', label: 'Block', color: 'text-red-400' },
+  { value: 'warn', label: 'Warn', color: 'text-yellow-400' },
+  { value: 'off', label: 'Off', color: 'text-gray-500' },
+];
 
 // ── Section collapse component ──────────────────────────────────────────────
 
@@ -95,10 +130,14 @@ export default function SettingsPage() {
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [portChanged, setPortChanged] = useState(false);
+  const [originalPort, setOriginalPort] = useState<number | null>(null);
 
   // Load config
   const loadConfig = useCallback(() => {
@@ -110,6 +149,8 @@ export default function SettingsPage() {
         setConfig(data);
         setLoading(false);
         setDirty(false);
+        setPortChanged(false);
+        setOriginalPort(data.general.port);
       })
       .catch((err) => {
         setFetchError(err instanceof Error ? err.message : 'Failed to load configuration');
@@ -141,6 +182,9 @@ export default function SettingsPage() {
       return { ...prev, general: { ...prev.general, [key]: value } };
     });
     setDirty(true);
+    if (key === 'port') {
+      setPortChanged(value !== originalPort);
+    }
     // Clear validation error for this field
     setValidationErrors((prev) => {
       const next = { ...prev };
@@ -203,6 +247,55 @@ export default function SettingsPage() {
     });
   }
 
+  function updateGuardrailMode(ruleName: string, mode: GuardrailAction) {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const existing = prev.guardrails[ruleName] ?? { mode: 'off' };
+      return {
+        ...prev,
+        guardrails: {
+          ...prev.guardrails,
+          [ruleName]: { ...existing, mode },
+        },
+      };
+    });
+    setDirty(true);
+  }
+
+  function updateGuardrailParam(ruleName: string, paramKey: string, value: unknown) {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const existing = prev.guardrails[ruleName] ?? { mode: 'off' };
+      return {
+        ...prev,
+        guardrails: {
+          ...prev.guardrails,
+          [ruleName]: { ...existing, [paramKey]: value },
+        },
+      };
+    });
+    setDirty(true);
+  }
+
+  async function handlePurge() {
+    setPurging(true);
+    try {
+      const result = await api.purgeData();
+      setShowPurgeConfirm(false);
+      setToast({
+        message: `Data older than ${result.retentionDays} days purged successfully.`,
+        type: 'success',
+      });
+    } catch (err) {
+      setToast({
+        message: err instanceof Error ? err.message : 'Failed to purge data.',
+        type: 'error',
+      });
+    } finally {
+      setPurging(false);
+    }
+  }
+
   // ── Validation ──────────────────────────────────────────────────────────
 
   function validate(): boolean {
@@ -231,6 +324,22 @@ export default function SettingsPage() {
       errors['alerts.perDayCostLimit'] = 'Must be a positive number or empty';
     }
 
+    // Guardrails
+    for (const [ruleName, rule] of Object.entries(config.guardrails)) {
+      if (!['block', 'warn', 'off'].includes(rule.mode)) {
+        errors[`guardrails.${ruleName}.mode`] = 'Mode must be block, warn, or off';
+      }
+      if (rule.costLimit !== undefined && rule.costLimit <= 0) {
+        errors[`guardrails.${ruleName}.costLimit`] = 'Cost limit must be positive';
+      }
+      if (rule.chainLimit !== undefined && rule.chainLimit <= 0) {
+        errors[`guardrails.${ruleName}.chainLimit`] = 'Chain limit must be positive';
+      }
+      if (rule.delayMs !== undefined && rule.delayMs < 0) {
+        errors[`guardrails.${ruleName}.delayMs`] = 'Delay must be non-negative';
+      }
+    }
+
     setValidationErrors(errors);
     return Object.keys(errors).length === 0;
   }
@@ -251,6 +360,7 @@ export default function SettingsPage() {
         display: config.display,
         scrape: config.scrape,
         alerts: config.alerts,
+        guardrails: config.guardrails,
       });
       setConfig(updated);
       setDirty(false);
@@ -535,6 +645,205 @@ export default function SettingsPage() {
           </Field>
         </div>
       </SettingsSection>
+
+      {/* ── Section 5: Guardrails Configuration ────────────────────────── */}
+      <SettingsSection
+        title="Guardrails"
+        description="Configure active guardrail rules and their enforcement modes"
+      >
+        <div className="space-y-4">
+          {Object.entries(config.guardrails).map(([ruleName, rule]) => {
+            const meta = GUARDRAIL_LABELS[ruleName] ?? {
+              name: ruleName.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+              description: '',
+            };
+            return (
+              <div
+                key={ruleName}
+                className="border border-gray-700 rounded-lg p-4 space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Text className="text-gray-200 font-medium">{meta.name}</Text>
+                    {meta.description && (
+                      <Text className="text-gray-500 text-xs">{meta.description}</Text>
+                    )}
+                  </div>
+                  <Select
+                    value={rule.mode}
+                    onValueChange={(val) =>
+                      updateGuardrailMode(ruleName, val as GuardrailAction)
+                    }
+                    className="max-w-[120px]"
+                  >
+                    {GUARDRAIL_MODE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </div>
+
+                {rule.mode !== 'off' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-gray-700/50">
+                    {rule.patterns !== undefined && (
+                      <Field
+                        label="Patterns (comma-separated)"
+                        error={validationErrors[`guardrails.${ruleName}.patterns`]}
+                      >
+                        <TextInput
+                          value={(rule.patterns ?? []).join(', ')}
+                          onChange={(e) =>
+                            updateGuardrailParam(
+                              ruleName,
+                              'patterns',
+                              e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                            )
+                          }
+                        />
+                      </Field>
+                    )}
+                    {rule.paths !== undefined && (
+                      <Field
+                        label="Paths (comma-separated)"
+                        error={validationErrors[`guardrails.${ruleName}.paths`]}
+                      >
+                        <TextInput
+                          value={(rule.paths ?? []).join(', ')}
+                          onChange={(e) =>
+                            updateGuardrailParam(
+                              ruleName,
+                              'paths',
+                              e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                            )
+                          }
+                        />
+                      </Field>
+                    )}
+                    {rule.costLimit !== undefined && (
+                      <Field
+                        label="Cost Limit (USD)"
+                        error={validationErrors[`guardrails.${ruleName}.costLimit`]}
+                      >
+                        <NumberInput
+                          value={rule.costLimit}
+                          onValueChange={(val) =>
+                            updateGuardrailParam(ruleName, 'costLimit', val ?? 0)
+                          }
+                          min={0}
+                          step={0.5}
+                          enableStepper={false}
+                        />
+                      </Field>
+                    )}
+                    {rule.chainLimit !== undefined && (
+                      <Field
+                        label="Chain Limit (turns)"
+                        error={validationErrors[`guardrails.${ruleName}.chainLimit`]}
+                      >
+                        <NumberInput
+                          value={rule.chainLimit}
+                          onValueChange={(val) =>
+                            updateGuardrailParam(ruleName, 'chainLimit', val ?? 0)
+                          }
+                          min={1}
+                          step={1}
+                          enableStepper={false}
+                        />
+                      </Field>
+                    )}
+                    {rule.delayMs !== undefined && (
+                      <Field
+                        label="Delay (ms)"
+                        error={validationErrors[`guardrails.${ruleName}.delayMs`]}
+                      >
+                        <NumberInput
+                          value={rule.delayMs}
+                          onValueChange={(val) =>
+                            updateGuardrailParam(ruleName, 'delayMs', val ?? 0)
+                          }
+                          min={0}
+                          step={100}
+                          enableStepper={false}
+                        />
+                      </Field>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {Object.keys(config.guardrails).length === 0 && (
+            <Text className="text-gray-500 text-sm">
+              No guardrail rules configured. Save settings to initialize defaults.
+            </Text>
+          )}
+        </div>
+      </SettingsSection>
+
+      {/* ── Section 6: Data Management ────────────────────────────────── */}
+      <SettingsSection
+        title="Data Management"
+        description="Manage stored data and perform maintenance operations"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Text className="text-gray-300 font-medium">Purge Old Data</Text>
+              <Text className="text-gray-500 text-xs">
+                Delete sessions, events, and metrics older than the configured retention period
+                ({config.general.retentionDays} days)
+              </Text>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() => setShowPurgeConfirm(true)}
+              disabled={purging}
+              className="bg-red-900/30 text-red-300 border-red-700 hover:bg-red-900/50"
+            >
+              Purge Data
+            </Button>
+          </div>
+
+          {showPurgeConfirm && (
+            <Callout title="Confirm Data Purge" color="red">
+              <Text className="text-red-200 mb-3">
+                This will permanently delete all data older than {config.general.retentionDays} days.
+                This action cannot be undone.
+              </Text>
+              <Flex justifyContent="end" className="gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowPurgeConfirm(false)}
+                  disabled={purging}
+                  size="xs"
+                  className="bg-gray-700 text-gray-300 border-gray-600"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={handlePurge}
+                  loading={purging}
+                  disabled={purging}
+                  size="xs"
+                  className="bg-red-600 text-white border-red-600 hover:bg-red-700"
+                >
+                  {purging ? 'Purging...' : 'Confirm Purge'}
+                </Button>
+              </Flex>
+            </Callout>
+          )}
+        </div>
+      </SettingsSection>
+
+      {/* ── Port restart warning ──────────────────────────────────────── */}
+      {portChanged && (
+        <Callout title="Server Restart Required" color="amber">
+          Changing the port requires a server restart to take effect. After saving, restart
+          the Ralph Monitor server for the new port to be used.
+        </Callout>
+      )}
 
       {/* ── Save / Reset buttons ──────────────────────────────────────── */}
       <Card className="bg-gray-800 ring-gray-700">

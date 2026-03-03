@@ -99,7 +99,14 @@ export const DEFAULT_CONFIG: Config = {
     captureFullResponses: false,
     captureExtendedThinking: true,
   },
-  guardrails: {},
+  guardrails: {
+    dangerous_command_blocker: { mode: 'block', patterns: ['rm -rf /', 'DROP TABLE', 'FORMAT'] },
+    sensitive_file_blocker: { mode: 'block', paths: ['.env', '.env.local', 'credentials.json', '*.pem', '*.key'] },
+    cost_guardrail: { mode: 'warn', costLimit: 5.0 },
+    long_chain_detection: { mode: 'warn', chainLimit: 50 },
+    rate_limit_throttle: { mode: 'warn', delayMs: 1000 },
+    quality_gate: { mode: 'warn' },
+  },
   display: {
     theme: 'dark',
     liveFeedVerbosity: 'summary',
