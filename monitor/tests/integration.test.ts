@@ -229,7 +229,7 @@ describe('Integration Test 1 — Full pipeline: event ingestion to API', () => {
     const eventsRes = await fastify.inject({ method: 'GET', url: `/api/sessions/${sessionId}/events` });
     expect(eventsRes.statusCode).toBe(200);
     const eventsBody = JSON.parse(eventsRes.body);
-    expect(eventsBody.events).toHaveLength(3);
+    expect(eventsBody.data).toHaveLength(3);
     expect(eventsBody.total).toBe(3);
   });
 

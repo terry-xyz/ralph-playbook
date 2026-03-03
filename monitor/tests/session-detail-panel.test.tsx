@@ -36,7 +36,7 @@ vi.mock('@client/api', () => ({
 import SessionDetailPanel from '@client/components/SessionDetailPanel';
 import { api } from '@client/api';
 
-const mockSession = {
+const mockSessionData = {
   sessionId: 'test-session-123',
   project: 'my-project',
   workspace: '/home/user/project',
@@ -50,6 +50,12 @@ const mockSession = {
   inferredPhase: null,
   lastSeen: '2026-03-03T10:30:00.000Z',
   errorCount: 2,
+};
+
+const mockSession = {
+  session: mockSessionData,
+  metrics: null,
+  tools: [],
 };
 
 const mockEvents = {
@@ -292,13 +298,13 @@ describe('SessionDetailPanel (Spec 10 — Side Panel Behavior)', () => {
     });
   });
 
-  // ── Token Breakdown ───────────────────────────────────────────────────
+  // ── Token Usage ─────────────────────────────────────────────────────
 
-  it('displays token breakdown section', async () => {
+  it('displays token usage section', async () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByText('Token Breakdown')).toBeDefined();
+      expect(screen.getByText('Token Usage')).toBeDefined();
     });
   });
 
@@ -380,7 +386,11 @@ describe('SessionDetailPanel (Spec 10 — Side Panel Behavior)', () => {
   it('auto-refreshes data for running sessions (AC 36)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
-    const runningSession = { ...mockSession, status: 'running' as const, endTime: null };
+    const runningSession = {
+      session: { ...mockSessionData, status: 'running' as const, endTime: null },
+      metrics: null,
+      tools: [],
+    };
     (api.getSession as ReturnType<typeof vi.fn>).mockResolvedValue(runningSession);
 
     renderPanel();

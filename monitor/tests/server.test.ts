@@ -373,7 +373,7 @@ describe('H2 — GET /api/sessions/:id/events', () => {
     }
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions/s1/events?limit=2&page=1' });
     const body = JSON.parse(res.body);
-    expect(body.events).toHaveLength(2);
+    expect(body.data).toHaveLength(2);
     expect(body.total).toBe(5);
   });
 
@@ -383,8 +383,8 @@ describe('H2 — GET /api/sessions/:id/events', () => {
     seedEvent('e2', 's1', { timestamp: '2025-01-01T09:00:00Z' });
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions/s1/events' });
     const body = JSON.parse(res.body);
-    expect(body.events[0].eventId).toBe('e2'); // Earlier timestamp first
-    expect(body.events[1].eventId).toBe('e1');
+    expect(body.data[0].id).toBe('e2'); // Earlier timestamp first
+    expect(body.data[1].id).toBe('e1');
   });
 });
 

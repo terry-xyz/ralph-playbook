@@ -237,8 +237,8 @@ export default function SessionDetailPage() {
     setSessionLoading(true);
     setSessionError(null);
     try {
-      const data = await api.getSession(id);
-      setSession(data);
+      const response = await api.getSession(id);
+      setSession(response.session);
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : 'Failed to load session');
     } finally {

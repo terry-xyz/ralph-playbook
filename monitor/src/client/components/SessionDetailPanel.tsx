@@ -11,9 +11,11 @@ import {
   TableCell,
   DonutChart,
   BarList,
+  BarChart,
   Text,
 } from '@tremor/react';
 import { api } from '@client/api';
+import type { SessionDetailMetrics, SessionDetailTool } from '@client/api';
 import type { Session, EventRecord, SessionStatus } from '@shared/types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -238,6 +240,8 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
 
   // Data state
   const [session, setSession] = useState<Session | null>(null);
+  const [metrics, setMetrics] = useState<SessionDetailMetrics | null>(null);
+  const [serverTools, setServerTools] = useState<SessionDetailTool[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [eventsLoading, setEventsLoading] = useState(true);
@@ -263,8 +267,10 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
     setSessionLoading(true);
     setSessionError(null);
     try {
-      const data = await api.getSession(sessionId);
-      setSession(data);
+      const response = await api.getSession(sessionId);
+      setSession(response.session);
+      setMetrics(response.metrics);
+      setServerTools(response.tools);
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : 'Failed to load session');
     } finally {
@@ -356,15 +362,37 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
 
   // ── Computed data ──────────────────────────────────────────────────────────
 
-  const toolStats = useMemo(() => computeToolStats(events), [events]);
+  // Prefer server-provided tool stats; fall back to client-side computation
+  const toolStats = useMemo(() => {
+    if (serverTools.length > 0) {
+      return serverTools.map((t) => ({
+        tool: t.toolName as string,
+        calls: t.callCount as number,
+        successes: t.successCount as number,
+        failures: t.failureCount as number,
+        avgDuration: (t.avgDuration as number) ?? 0,
+      })).sort((a, b) => b.calls - a.calls);
+    }
+    return computeToolStats(events);
+  }, [serverTools, events]);
 
+  // Use exact cost breakdown from metrics when available
   const costBreakdownData = useMemo(() => {
+    if (metrics?.costBreakdown) {
+      const cb = metrics.costBreakdown;
+      const items: { name: string; value: number }[] = [];
+      if (cb.inputCost > 0) items.push({ name: 'Input', value: Number(cb.inputCost.toFixed(4)) });
+      if (cb.outputCost > 0) items.push({ name: 'Output', value: Number(cb.outputCost.toFixed(4)) });
+      if (cb.cacheCreationCost > 0) items.push({ name: 'Cache Creation', value: Number(cb.cacheCreationCost.toFixed(4)) });
+      if (cb.cacheReadCost > 0) items.push({ name: 'Cache Read', value: Number(cb.cacheReadCost.toFixed(4)) });
+      return items;
+    }
+    // Fallback: approximate from token ratios
     if (!session) return [];
     const { tokenCounts } = session;
     const totalTokens =
       tokenCounts.input + tokenCounts.output + tokenCounts.cacheCreation + tokenCounts.cacheRead;
     if (totalTokens === 0) return [];
-
     const items: { name: string; value: number }[] = [];
     const ratios = [
       { name: 'Input', ratio: tokenCounts.input / totalTokens },
@@ -376,7 +404,19 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
       if (ratio > 0) items.push({ name, value: Number((session.totalCost * ratio).toFixed(4)) });
     }
     return items;
-  }, [session]);
+  }, [metrics, session]);
+
+  // Token breakdown chart data (ACs 27-28)
+  const tokenChartData = useMemo(() => {
+    const tc = metrics?.tokenBreakdown ?? session?.tokenCounts;
+    if (!tc) return [];
+    return [
+      { category: 'Input', tokens: tc.input },
+      { category: 'Output', tokens: tc.output },
+      { category: 'Cache Creation', tokens: tc.cacheCreation },
+      { category: 'Cache Read', tokens: tc.cacheRead },
+    ].filter((d) => d.tokens > 0);
+  }, [metrics, session]);
 
   const toolBarListData = useMemo(
     () => toolStats.map((ts) => ({ name: ts.tool, value: ts.calls })),
@@ -562,7 +602,7 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
                 )}
               </section>
 
-              {/* Tool Call Breakdown */}
+              {/* Tool Call Breakdown (AC 26 — expandable) */}
               <section>
                 <h3 className="text-sm font-semibold text-gray-200 mb-3">Tool Call Breakdown</h3>
                 {toolStats.length === 0 ? (
@@ -583,17 +623,7 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
                         </TableHead>
                         <TableBody>
                           {toolStats.map((ts) => (
-                            <TableRow key={ts.tool} className="border-b border-gray-700/50">
-                              <TableCell className="text-blue-400 text-xs font-mono">{ts.tool}</TableCell>
-                              <TableCell className="text-gray-300 text-xs text-center">{ts.calls}</TableCell>
-                              <TableCell className="text-green-400 text-xs text-center">{ts.successes}</TableCell>
-                              <TableCell className={`text-xs text-center ${ts.failures > 0 ? 'text-red-400' : 'text-gray-500'}`}>
-                                {ts.failures}
-                              </TableCell>
-                              <TableCell className="text-gray-400 text-xs text-right font-mono">
-                                {ts.avgDuration > 0 ? ts.avgDuration.toFixed(0) : '--'}
-                              </TableCell>
-                            </TableRow>
+                            <ExpandableToolRow key={ts.tool} tool={ts} events={events} />
                           ))}
                         </TableBody>
                       </Table>
@@ -634,9 +664,21 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
                 )}
               </section>
 
-              {/* Token Breakdown */}
+              {/* Token Usage (ACs 27-28 — chart + breakdown) */}
               <section>
-                <h3 className="text-sm font-semibold text-gray-200 mb-3">Token Breakdown</h3>
+                <h3 className="text-sm font-semibold text-gray-200 mb-3">Token Usage</h3>
+                {tokenChartData.length > 0 && (
+                  <BarChart
+                    data={tokenChartData}
+                    index="category"
+                    categories={['tokens']}
+                    colors={['blue']}
+                    className="h-40 mb-3"
+                    valueFormatter={(v) => formatTokens(v)}
+                    showAnimation
+                    showLegend={false}
+                  />
+                )}
                 <div className="space-y-2">
                   {[
                     { label: 'Input', value: session.tokenCounts.input },
@@ -667,6 +709,81 @@ export default function SessionDetailPanel({ sessionId, onClose }: SessionDetail
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Expandable Tool Row (AC 26) ──────────────────────────────────────────────
+
+function ExpandableToolRow({ tool, events }: { tool: ToolStats; events: EventRecord[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const toolEvents = useMemo(
+    () => events.filter((e) => e.tool === tool.tool && (e.type === 'PostToolUse' || e.type === 'PostToolUseFailure')),
+    [events, tool.tool],
+  );
+
+  return (
+    <>
+      <TableRow
+        className="border-b border-gray-700/50 cursor-pointer hover:bg-gray-800/50 transition-colors"
+        onClick={() => setExpanded((prev) => !prev)}
+      >
+        <TableCell className="text-blue-400 text-xs font-mono">
+          <span className="mr-1 text-gray-600">{expanded ? '\u25BC' : '\u25B6'}</span>
+          {tool.tool}
+        </TableCell>
+        <TableCell className="text-gray-300 text-xs text-center">{tool.calls}</TableCell>
+        <TableCell className="text-green-400 text-xs text-center">{tool.successes}</TableCell>
+        <TableCell className={`text-xs text-center ${tool.failures > 0 ? 'text-red-400' : 'text-gray-500'}`}>
+          {tool.failures}
+        </TableCell>
+        <TableCell className="text-gray-400 text-xs text-right font-mono">
+          {tool.avgDuration > 0 ? tool.avgDuration.toFixed(0) : '--'}
+        </TableCell>
+      </TableRow>
+      {expanded && toolEvents.length > 0 && (
+        <TableRow className="border-b border-gray-700/30">
+          <TableCell colSpan={5} className="p-0">
+            <div className="bg-gray-800/40 px-3 py-2 max-h-48 overflow-y-auto space-y-1.5">
+              {toolEvents.slice(0, 20).map((evt) => (
+                <div key={evt.id} className="text-xs border-l-2 border-gray-600 pl-2 py-0.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge color={evt.type === 'PostToolUse' ? 'green' : 'red'} size="xs">
+                      {evt.type === 'PostToolUse' ? 'OK' : 'FAIL'}
+                    </Badge>
+                    <span className="text-gray-500">{formatTimestamp(evt.timestamp)}</span>
+                    {evt.duration !== undefined && evt.duration > 0 && (
+                      <span className="text-gray-500">({evt.duration.toFixed(0)}ms)</span>
+                    )}
+                  </div>
+                  {evt.payload && (
+                    <pre className="mt-1 bg-gray-900 rounded p-1.5 text-[10px] text-gray-400 overflow-x-auto max-h-24 overflow-y-auto">
+                      {JSON.stringify(evt.payload, null, 2).slice(0, 500)}
+                    </pre>
+                  )}
+                </div>
+              ))}
+              {toolEvents.length > 20 && (
+                <p className="text-gray-500 text-xs text-center pt-1">
+                  ...and {toolEvents.length - 20} more calls (showing first 20)
+                </p>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+      {expanded && toolEvents.length === 0 && (
+        <TableRow className="border-b border-gray-700/30">
+          <TableCell colSpan={5} className="p-0">
+            <div className="bg-gray-800/40 px-3 py-2">
+              <p className="text-gray-500 text-xs">
+                Call details not available on this page of events.
+              </p>
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }
 

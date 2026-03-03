@@ -155,6 +155,29 @@ export interface RateLimitResponse {
   cooldowns: RateLimitCooldown[];
 }
 
+export interface SessionDetailMetrics {
+  costBreakdown: { inputCost: number; outputCost: number; cacheCreationCost: number; cacheReadCost: number };
+  tokenBreakdown: { input: number; output: number; cacheCreation: number; cacheRead: number };
+  model: string | null;
+  wallClockDuration: number | null;
+  apiDuration: number | null;
+  turnCount: number;
+}
+
+export interface SessionDetailTool {
+  toolName: string;
+  callCount: number;
+  successCount: number;
+  failureCount: number;
+  avgDuration: number | null;
+}
+
+export interface SessionDetailResponse {
+  session: Session;
+  metrics: SessionDetailMetrics | null;
+  tools: SessionDetailTool[];
+}
+
 export interface SearchResult {
   type: 'session' | 'event' | 'error';
   id: string;
@@ -187,7 +210,7 @@ export const api = {
     return request('/api/sessions/filters');
   },
 
-  getSession(id: string): Promise<Session> {
+  getSession(id: string): Promise<SessionDetailResponse> {
     return request(`/api/sessions/${encodeURIComponent(id)}`);
   },
 

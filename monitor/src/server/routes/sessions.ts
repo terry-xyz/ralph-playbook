@@ -220,17 +220,17 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       [id, limit, offset]
     );
 
-    const events = result.length > 0 ? result[0].values.map((row: unknown[]) => ({
-      eventId: row[0],
+    const data = result.length > 0 ? result[0].values.map((row: unknown[]) => ({
+      id: row[0],
       sessionId: row[1],
       timestamp: row[2],
       type: row[3],
-      toolName: row[4],
+      tool: row[4],
       payload: JSON.parse(row[5] as string || '{}'),
       duration: row[6],
       toolUseId: row[7],
     })) : [];
 
-    return { events, total, page, limit };
+    return { data, total, page, limit };
   });
 }

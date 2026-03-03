@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17. 297 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17/S27/S28. 301 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -61,8 +61,8 @@
 - [ ] **S24** — Top stats toolCallsPerMin returns numbers not (timestamp, count) pairs (Spec 06)
 - [ ] **S25** — No Fastify schema validation on any API endpoint (Spec 06)
 - [ ] **S26** — Multiple model tracking stores only last model (Spec 03 AC 2)
-- [ ] **S27** — Scraped errors not persisted to database (Spec 03 AC 6)
-- [ ] **S28** — Session detail missing: token usage chart (Spec 10 ACs 27-29), tool breakdown expandable (AC 26), auto-update for running sessions (AC 36)
+- [x] **S27** — Scraped errors persisted to database (Spec 03 AC 6): Added `ScrapedError` event type; `scrapeSession()` now inserts extracted errors into events table with pre-classified categories, increments session `error_count`; analytics error endpoints (list, trend, rate-limits) updated to include ScrapedError; 4 backend tests
+- [x] **S28** — Session detail enhancements (Spec 10 ACs 26-29, 36): Fixed `api.getSession()` to properly unwrap `{session, metrics, tools}` envelope; exact cost breakdown from metrics; expandable tool entries showing individual call inputs/outputs (AC 26); token usage BarChart (ACs 27-28); AC 36 (auto-refresh) was already implemented; fixed events endpoint to return `{data}` with correct field names matching `EventRecord` type
 - [ ] **S29** — ErrorsPage missing: tool filter (Spec 13 AC 5), live updates (AC 29)
 - [ ] **S30** — CostsPage: default time range not from config (Spec 12 AC 32), cost-avoided uses hardcoded rate (AC 21)
 - [ ] **S31** — CLI wizard: 11 ACs untested (Spec 15 ACs 2,5-9,11-13,15-16)
@@ -1506,6 +1506,9 @@ Phase R (Integration & Distribution)
 - **Rate limit cooldown detection heuristic** — Gaps between consecutive rate limit events in 5s-5min range are classified as cooldown periods. This is a heuristic that works well for typical API rate limit patterns.
 - **View toggle preserves filter state** — Switching between Error Log and Rate Limits sub-views on ErrorsPage preserves all filter state (S12 AC 26), since both views share the same component state.
 - **Scraper integration is fire-and-forget** — `scrapeSession()` is called after the transaction COMMIT in `insertBatch()`, not inside the transaction. This ensures the scraper never blocks event insertion or causes rollbacks. Failures are caught and logged via `.catch()`. Config must be threaded through the entire call chain (`processAllFiles` → `processFile` → `insertBatch`) since the scraper needs `config.scrape.claudeDir` to find session files.
+- **ScrapedError is a synthetic event type** — Unlike the 12 hook-based event types, `ScrapedError` is generated internally by the scraper. It's added to `HookEventType` for type safety but NOT to `HOOK_EVENT_TYPES` constant (which the CLI wizard iterates to create hook scripts). Error analytics queries must include it explicitly.
+- **Session detail API returns an envelope** — `GET /api/sessions/:id` returns `{ session, metrics, tools }`, not a flat Session object. The client `api.getSession()` was incorrectly typed as `Promise<Session>` — now correctly returns `Promise<SessionDetailResponse>`. Callers must unwrap `response.session`.
+- **Events endpoint field name alignment** — The server's events endpoint used `eventId`/`toolName` but the client's `EventRecord` type uses `id`/`tool`. Fixed the server to use the shared type field names. The response key is now `data` (matching `PaginatedResponse`) instead of `events`.
 
 ---
 
