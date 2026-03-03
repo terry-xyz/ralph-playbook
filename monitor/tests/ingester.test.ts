@@ -4,6 +4,7 @@
  * E2: Batch parsing and insertion
  * E3: Daemon lifecycle (tested at unit level)
  * E4: Post-ingestion file cleanup
+ * S17: Scraper integration into ingestion pipeline
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -303,5 +304,190 @@ describe('E4 — Post-ingestion file cleanup', () => {
     const deleted = cleanupOldFiles(eventsDir);
     expect(deleted).toBe(0);
     expect(fs.existsSync(oldFile)).toBe(true);
+  });
+});
+
+// ── S17: Scraper Integration into Ingestion Pipeline ────────────────────────
+
+describe('S17 — Scraper integration into ingestion pipeline', () => {
+  it('should call scrapeSession for Stop events when config is provided', async () => {
+    const { scrapeSession } = await import('@server/scraper.js');
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockResolvedValue(undefined);
+
+    const db = storage.getDb();
+    const sessionId = 'scrape-test-stop';
+    const stopEvent = makeEvent({ sessionId, type: 'Stop' });
+
+    const config = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60 },
+      ingestion: { batchIntervalMs: 1000, batchSize: 100 },
+      scrape: { claudeDir: '~/.claude', captureExtendedThinking: true, captureFullResponses: false },
+      alerts: { perSessionCostLimit: null, perDayCostLimit: null },
+      pricing: {},
+    } as any;
+
+    insertBatch(db, [stopEvent], config);
+
+    // Allow fire-and-forget promises to resolve
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).toHaveBeenCalledWith(db, sessionId, config);
+
+    scrapeSpy.mockRestore();
+  });
+
+  it('should call scrapeSession for SessionEnd events when config is provided', async () => {
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockResolvedValue(undefined);
+
+    const db = storage.getDb();
+    const sessionId = 'scrape-test-session-end';
+    const endEvent = makeEvent({ sessionId, type: 'SessionEnd' });
+
+    const config = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60 },
+      ingestion: { batchIntervalMs: 1000, batchSize: 100 },
+      scrape: { claudeDir: '~/.claude', captureExtendedThinking: true, captureFullResponses: false },
+      alerts: { perSessionCostLimit: null, perDayCostLimit: null },
+      pricing: {},
+    } as any;
+
+    insertBatch(db, [endEvent], config);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).toHaveBeenCalledWith(db, sessionId, config);
+
+    scrapeSpy.mockRestore();
+  });
+
+  it('should NOT call scrapeSession when no config is provided', async () => {
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockResolvedValue(undefined);
+
+    const db = storage.getDb();
+    const stopEvent = makeEvent({ type: 'Stop' });
+
+    // No config argument
+    insertBatch(db, [stopEvent]);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).not.toHaveBeenCalled();
+
+    scrapeSpy.mockRestore();
+  });
+
+  it('should NOT call scrapeSession for non-Stop/SessionEnd events', async () => {
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockResolvedValue(undefined);
+
+    const db = storage.getDb();
+    const config = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60 },
+      ingestion: { batchIntervalMs: 1000, batchSize: 100 },
+      scrape: { claudeDir: '~/.claude', captureExtendedThinking: true, captureFullResponses: false },
+      alerts: { perSessionCostLimit: null, perDayCostLimit: null },
+      pricing: {},
+    } as any;
+
+    const regularEvents = [
+      makeEvent({ type: 'PostToolUse' }),
+      makeEvent({ type: 'PreToolUse' }),
+    ];
+
+    insertBatch(db, regularEvents, config);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).not.toHaveBeenCalled();
+
+    scrapeSpy.mockRestore();
+  });
+
+  it('should thread config through processFile to trigger scraping', async () => {
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockResolvedValue(undefined);
+
+    const config = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60 },
+      ingestion: { batchIntervalMs: 1000, batchSize: 100 },
+      scrape: { claudeDir: '~/.claude', captureExtendedThinking: true, captureFullResponses: false },
+      alerts: { perSessionCostLimit: null, perDayCostLimit: null },
+      pricing: {},
+    } as any;
+
+    const filePath = path.join(eventsDir, 'test-scrape.jsonl');
+    const stopEvent = makeEvent({ sessionId: 'file-scrape-test', type: 'Stop' });
+    writeJsonlFile(filePath, [stopEvent]);
+
+    processFile(storage.getDb(), filePath, config);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).toHaveBeenCalledWith(
+      storage.getDb(),
+      'file-scrape-test',
+      config,
+    );
+
+    scrapeSpy.mockRestore();
+  });
+
+  it('should thread config through processAllFiles to trigger scraping', async () => {
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockResolvedValue(undefined);
+
+    const config = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60 },
+      ingestion: { batchIntervalMs: 1000, batchSize: 100 },
+      scrape: { claudeDir: '~/.claude', captureExtendedThinking: true, captureFullResponses: false },
+      alerts: { perSessionCostLimit: null, perDayCostLimit: null },
+      pricing: {},
+    } as any;
+
+    const filePath = path.join(eventsDir, 'events-2024-01-15.jsonl');
+    const endEvent = makeEvent({ sessionId: 'all-files-scrape-test', type: 'SessionEnd' });
+    writeJsonlFile(filePath, [endEvent]);
+
+    processAllFiles(storage.getDb(), eventsDir, config);
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).toHaveBeenCalledWith(
+      storage.getDb(),
+      'all-files-scrape-test',
+      config,
+    );
+
+    scrapeSpy.mockRestore();
+  });
+
+  it('should not block on scrapeSession failure (fire-and-forget)', async () => {
+    const scrapeSpy = vi.spyOn(await import('@server/scraper.js'), 'scrapeSession')
+      .mockRejectedValue(new Error('scrape failed'));
+
+    const db = storage.getDb();
+    const config = {
+      general: { port: 9100, dataDir: './data', staleTimeoutMinutes: 60 },
+      ingestion: { batchIntervalMs: 1000, batchSize: 100 },
+      scrape: { claudeDir: '~/.claude', captureExtendedThinking: true, captureFullResponses: false },
+      alerts: { perSessionCostLimit: null, perDayCostLimit: null },
+      pricing: {},
+    } as any;
+
+    const stopEvent = makeEvent({ type: 'Stop', sessionId: 'fail-scrape-test' });
+
+    // Should not throw even though scrapeSession will reject
+    const result = insertBatch(db, [stopEvent], config);
+    expect(result.inserted).toBe(1);
+
+    // Allow the rejected promise to settle
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(scrapeSpy).toHaveBeenCalled();
+
+    scrapeSpy.mockRestore();
   });
 });

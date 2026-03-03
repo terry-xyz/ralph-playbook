@@ -14,9 +14,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Database } from 'sql.js';
-import type { EventRecord } from '@shared/types.js';
+import type { EventRecord, Config } from '@shared/types.js';
 import { isValidEventType } from '@shared/event-names.js';
 import { processEvent, categorizeError, detectStaleSessions } from './session-lifecycle.js';
+import { scrapeSession } from './scraper.js';
 
 // ── Position Tracking (E1) ───────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ export function readNewLines(filePath: string, fromOffset: number): {
  * Idempotent: duplicate event IDs are skipped.
  * Also processes session lifecycle (G1) for each event.
  */
-export function insertBatch(db: Database, events: EventRecord[]): {
+export function insertBatch(db: Database, events: EventRecord[], config?: Readonly<Config>): {
   inserted: number;
   duplicates: number;
   errors: number;
@@ -134,6 +135,7 @@ export function insertBatch(db: Database, events: EventRecord[]): {
   let inserted = 0;
   let duplicates = 0;
   let errors = 0;
+  const sessionsToScrape: string[] = [];
 
   db.run('BEGIN TRANSACTION;');
   try {
@@ -167,6 +169,11 @@ export function insertBatch(db: Database, events: EventRecord[]): {
           event.toolUseId ?? null,
         ]);
 
+        // Collect sessions for post-session scraping (Spec 02/03 integration)
+        if (event.type === 'Stop' || event.type === 'SessionEnd') {
+          sessionsToScrape.push(event.sessionId);
+        }
+
         inserted++;
       } catch (err) {
         errors++;
@@ -179,6 +186,15 @@ export function insertBatch(db: Database, events: EventRecord[]): {
     throw err;
   }
 
+  // Fire-and-forget post-session scraping after commit (non-blocking)
+  if (config && sessionsToScrape.length > 0) {
+    for (const sessionId of sessionsToScrape) {
+      scrapeSession(db, sessionId, config).catch((err) => {
+        console.warn(`[ralph-monitor] Post-session scrape failed for ${sessionId}:`, err);
+      });
+    }
+  }
+
   return { inserted, duplicates, errors };
 }
 
@@ -188,7 +204,7 @@ export function insertBatch(db: Database, events: EventRecord[]): {
  * Process a single JSONL file: read new lines, insert batch, update position.
  * Position is only advanced AFTER successful database insertion.
  */
-export function processFile(db: Database, filePath: string): {
+export function processFile(db: Database, filePath: string, config?: Readonly<Config>): {
   processed: number;
   malformed: number;
 } {
@@ -203,7 +219,7 @@ export function processFile(db: Database, filePath: string): {
     return { processed: 0, malformed: malformedCount };
   }
 
-  const { inserted, duplicates } = insertBatch(db, events);
+  const { inserted, duplicates } = insertBatch(db, events, config);
 
   // Only advance position after successful insertion
   savePosition(filePath, newOffset);
@@ -215,7 +231,7 @@ export function processFile(db: Database, filePath: string): {
  * Process all JSONL files in the events directory.
  * Returns total counts of processed and malformed events.
  */
-export function processAllFiles(db: Database, eventsDir: string): {
+export function processAllFiles(db: Database, eventsDir: string, config?: Readonly<Config>): {
   totalProcessed: number;
   totalMalformed: number;
   filesProcessed: number;
@@ -235,7 +251,7 @@ export function processAllFiles(db: Database, eventsDir: string): {
 
   for (const file of files) {
     const filePath = path.join(eventsDir, file);
-    const { processed, malformed } = processFile(db, filePath);
+    const { processed, malformed } = processFile(db, filePath, config);
     totalProcessed += processed;
     totalMalformed += malformed;
     if (processed > 0 || malformed > 0) filesProcessed++;
@@ -299,6 +315,7 @@ export class Ingester {
   private batchIntervalMs: number;
   private batchSize: number;
   private staleTimeoutMinutes: number;
+  private config?: Readonly<Config>;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private staleCheckHandle: ReturnType<typeof setInterval> | null = null;
   private watcher: any = null; // chokidar watcher
@@ -311,6 +328,7 @@ export class Ingester {
       batchIntervalMs?: number;
       batchSize?: number;
       staleTimeoutMinutes?: number;
+      config?: Readonly<Config>;
     } = {}
   ) {
     this.db = db;
@@ -318,12 +336,13 @@ export class Ingester {
     this.batchIntervalMs = options.batchIntervalMs ?? 1000;
     this.batchSize = options.batchSize ?? 100;
     this.staleTimeoutMinutes = options.staleTimeoutMinutes ?? 60;
+    this.config = options.config;
   }
 
   /** Start the ingester: process existing files, then watch for changes. */
   async start(): Promise<void> {
     // Process all existing files first
-    processAllFiles(this.db, this.eventsDir);
+    processAllFiles(this.db, this.eventsDir, this.config);
 
     // Start periodic processing
     this.intervalHandle = setInterval(() => {
@@ -358,7 +377,7 @@ export class Ingester {
   /** Process files once. */
   processOnce(): void {
     try {
-      processAllFiles(this.db, this.eventsDir);
+      processAllFiles(this.db, this.eventsDir, this.config);
     } catch (err) {
       console.error('[ralph-monitor] Ingester processing error:', err);
     }
@@ -391,7 +410,7 @@ export class Ingester {
 
     // Final processing pass
     try {
-      processAllFiles(this.db, this.eventsDir);
+      processAllFiles(this.db, this.eventsDir, this.config);
     } catch {
       // Best-effort on shutdown
     }

@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16. 290 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16/S17. 297 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -51,7 +51,7 @@
 - [x] **S16** — Custom date range picker on Costs page (Spec 12 AC 34): Added custom date range option with two date inputs alongside preset buttons; also added "agent name" dimension
 - [x] **S11** — Error rate time-series chart (Spec 13 ACs 18-21): Added `GET /api/analytics/errors/trend` endpoint with adaptive bucket sizing, stacked AreaChart by error category, session start/stop overlays, filter support; 5 backend tests
 - [x] **S12** — Rate limit sub-view on Errors page (Spec 13 ACs 22-26): Added `GET /api/analytics/errors/rate-limits` endpoint with frequency, model attribution, and cooldown pattern detection; toggle between Error Log and Rate Limits views; AreaChart frequency, BarChart by model, cooldown table; 5 backend tests
-- [ ] **S17** — Scraper not integrated into ingestion pipeline (Spec 02/03): scrapeSession() never called from ingester
+- [x] **S17** — Scraper integrated into ingestion pipeline (Spec 02/03): `insertBatch()` now collects sessions with Stop/SessionEnd events and fire-and-forget calls `scrapeSession()` after COMMIT; config threaded through `processFile`, `processAllFiles`, and `Ingester` class; 7 backend tests
 - [ ] **S18** — Ingester daemon process missing (Spec 02): No lock file, detached process, signal handling
 - [ ] **S19** — Project collision disambiguation (Spec 01 AC 23, Spec 05 AC 7): No hash-based disambiguation
 - [ ] **S20** — Subagent tracking metadata on parent session (Spec 05 ACs 11-12): Only turn_count incremented, no spawn count/tasks
@@ -1505,6 +1505,7 @@ Phase R (Integration & Distribution)
 - **Error trend adaptive bucketing** — `GET /api/analytics/errors/trend` auto-selects bucket size: 10min for <1day, 1hr for 1-7days, 1day for >7days. Categories are counted per bucket for stacked visualization.
 - **Rate limit cooldown detection heuristic** — Gaps between consecutive rate limit events in 5s-5min range are classified as cooldown periods. This is a heuristic that works well for typical API rate limit patterns.
 - **View toggle preserves filter state** — Switching between Error Log and Rate Limits sub-views on ErrorsPage preserves all filter state (S12 AC 26), since both views share the same component state.
+- **Scraper integration is fire-and-forget** — `scrapeSession()` is called after the transaction COMMIT in `insertBatch()`, not inside the transaction. This ensures the scraper never blocks event insertion or causes rollbacks. Failures are caught and logged via `.catch()`. Config must be threaded through the entire call chain (`processAllFiles` → `processFile` → `insertBatch`) since the scraper needs `config.scrape.claudeDir` to find session files.
 
 ---
 

@@ -42,16 +42,17 @@ export async function createServer(monitorRoot?: string) {
   await storage.init();
 
   // Ingest accumulated events on startup
-  processAllFiles(storage.getDb(), eventsDir);
+  processAllFiles(storage.getDb(), eventsDir, config);
 
   // Start periodic flush
   storage.startPeriodicFlush(5000);
 
-  // Start ingester (will watch for new events)
+  // Start ingester (will watch for new events, triggers post-session scraping)
   const ingester = new Ingester(storage.getDb(), eventsDir, {
     batchIntervalMs: config.ingestion.batchIntervalMs,
     batchSize: config.ingestion.batchSize,
     staleTimeoutMinutes: config.general.staleTimeoutMinutes,
+    config,
   });
 
   // Create Fastify instance
