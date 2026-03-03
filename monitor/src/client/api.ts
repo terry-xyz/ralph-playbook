@@ -252,6 +252,12 @@ export const api = {
     limit?: number;
     session?: string;
     project?: string;
+    category?: string;
+    tool?: string;
+    from?: string;
+    to?: string;
+    sort?: string;
+    order?: 'asc' | 'desc';
   }): Promise<PaginatedResponse<ErrorRecord>> {
     return request(`/api/analytics/errors${qs(params)}`);
   },

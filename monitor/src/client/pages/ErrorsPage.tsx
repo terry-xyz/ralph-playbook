@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -28,6 +28,7 @@ import {
   type ErrorTrendResponse,
   type RateLimitResponse,
 } from '../api';
+import { useWebSocket } from '../hooks/useWebSocket';
 import type { ErrorRecord, ErrorCategory } from '@shared/types';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -95,10 +96,15 @@ export default function ErrorsPage() {
   // View toggle: errors log vs rate-limits sub-view (S12 AC 22, 26)
   const [viewMode, setViewMode] = useState<ViewMode>('errors');
 
+  // WebSocket for live updates (S29 AC 29)
+  const { lastEvent } = useWebSocket();
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Filter state
   const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [sessionFilter, setSessionFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
+  const [toolFilter, setToolFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
@@ -122,22 +128,26 @@ export default function ErrorsPage() {
     return params;
   }, [dateFrom, dateTo]);
 
-  // Fetch errors
+  // Fetch errors — all filters sent server-side (S22 fix + S29 AC 5)
   const fetchErrors = useCallback(() => {
     setLoading(true);
     setError(null);
 
-    const params: Record<string, unknown> = {
+    const params: Parameters<typeof api.getAnalyticsErrors>[0] = {
       page,
       limit: PAGE_SIZE,
+      sort: sortField,
+      order: sortOrder,
       ...dateParams,
     };
 
     if (sessionFilter.trim()) params.session = sessionFilter.trim();
     if (projectFilter.trim()) params.project = projectFilter.trim();
+    if (toolFilter.trim()) params.tool = toolFilter.trim();
+    if (categoryFilter.length > 0) params.category = categoryFilter.join(',');
 
     api
-      .getAnalyticsErrors(params as Parameters<typeof api.getAnalyticsErrors>[0])
+      .getAnalyticsErrors(params)
       .then((data) => {
         setResponse(data);
         setLoading(false);
@@ -146,7 +156,7 @@ export default function ErrorsPage() {
         setError(err instanceof Error ? err.message : 'Failed to load errors');
         setLoading(false);
       });
-  }, [page, sessionFilter, projectFilter, dateParams]);
+  }, [page, sessionFilter, projectFilter, toolFilter, categoryFilter, dateParams, sortField, sortOrder]);
 
   useEffect(() => {
     fetchErrors();
@@ -173,48 +183,44 @@ export default function ErrorsPage() {
       .catch(() => { /* non-critical */ });
   }, [viewMode, dateParams]);
 
-  // Reset to page 1 when filters change
+  // Reset to page 1 when filters or sort change
   useEffect(() => {
     setPage(1);
-  }, [categoryFilter, sessionFilter, projectFilter, dateFrom, dateTo]);
+  }, [categoryFilter, sessionFilter, projectFilter, toolFilter, dateFrom, dateTo, sortField, sortOrder]);
 
-  // Client-side filtering + sorting
-  const filteredErrors = useMemo(() => {
-    if (!response) return [];
-    let errors = [...response.data];
+  // Live updates via WebSocket (S29 AC 29): debounced re-fetch on error events
+  useEffect(() => {
+    if (!lastEvent || typeof lastEvent !== 'object') return;
+    const eventType = (lastEvent as Record<string, unknown>).type as string | undefined;
+    if (!eventType) return;
 
-    if (categoryFilter.length > 0) {
-      errors = errors.filter((e) => categoryFilter.includes(e.category));
+    // Only re-fetch when a relevant error event arrives
+    const errorEventTypes = ['PostToolUseFailure', 'ScrapedError', 'Stop'];
+    if (!errorEventTypes.includes(eventType)) return;
+
+    // For Stop events, only re-fetch if it looks like an error stop
+    if (eventType === 'Stop') {
+      const payload = (lastEvent as Record<string, unknown>).payload;
+      const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload ?? '');
+      if (!payloadStr.includes('error') && !payloadStr.includes('is_error')) return;
     }
 
-    if (dateFrom) {
-      const fromDate = new Date(dateFrom);
-      errors = errors.filter((e) => new Date(e.timestamp) >= fromDate);
-    }
-    if (dateTo) {
-      const toDate = new Date(dateTo);
-      toDate.setHours(23, 59, 59, 999);
-      errors = errors.filter((e) => new Date(e.timestamp) <= toDate);
-    }
+    // Debounce re-fetches to batch rapid arrivals
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      fetchErrors();
+    }, 2000);
 
-    errors.sort((a, b) => {
-      let cmp = 0;
-      switch (sortField) {
-        case 'timestamp':
-          cmp = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-          break;
-        case 'category':
-          cmp = a.category.localeCompare(b.category);
-          break;
-        case 'project':
-          cmp = a.project.localeCompare(b.project);
-          break;
+    return () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
       }
-      return sortOrder === 'asc' ? cmp : -cmp;
-    });
+    };
+  }, [lastEvent, fetchErrors]);
 
-    return errors;
-  }, [response, categoryFilter, dateFrom, dateTo, sortField, sortOrder]);
+  // Data is now filtered and sorted server-side — use response directly
+  const displayErrors = response?.data ?? [];
 
   // Summary statistics
   const totalErrors = response?.total ?? 0;
@@ -391,7 +397,7 @@ export default function ErrorsPage() {
           {/* Filters */}
           <Card className="bg-gray-800 ring-gray-700">
             <Title className="text-gray-100 mb-4">Filters</Title>
-            <Grid numItemsMd={2} numItemsLg={4} className="gap-4">
+            <Grid numItemsMd={2} numItemsLg={3} className="gap-4">
               <div>
                 <Text className="text-gray-400 text-sm mb-1">Category</Text>
                 <MultiSelect
@@ -426,6 +432,15 @@ export default function ErrorsPage() {
               </div>
 
               <div>
+                <Text className="text-gray-400 text-sm mb-1">Tool</Text>
+                <TextInput
+                  placeholder="Filter by tool..."
+                  value={toolFilter}
+                  onChange={(e) => setToolFilter(e.target.value)}
+                />
+              </div>
+
+              <div className="lg:col-span-2">
                 <Text className="text-gray-400 text-sm mb-1">Date Range</Text>
                 <Flex className="gap-2">
                   <input
@@ -444,7 +459,7 @@ export default function ErrorsPage() {
               </div>
             </Grid>
 
-            {(categoryFilter.length > 0 || sessionFilter || projectFilter || dateFrom || dateTo) && (
+            {(categoryFilter.length > 0 || sessionFilter || projectFilter || toolFilter || dateFrom || dateTo) && (
               <Flex justifyContent="end" className="mt-3">
                 <Button
                   size="xs"
@@ -454,6 +469,7 @@ export default function ErrorsPage() {
                     setCategoryFilter([]);
                     setSessionFilter('');
                     setProjectFilter('');
+                    setToolFilter('');
                     setDateFrom('');
                     setDateTo('');
                   }}
@@ -469,7 +485,7 @@ export default function ErrorsPage() {
             <Flex justifyContent="between" alignItems="center" className="mb-4">
               <Title className="text-gray-100">Error Log</Title>
               <Text className="text-gray-400">
-                {filteredErrors.length} of {totalErrors} errors
+                {displayErrors.length} of {totalErrors} errors
               </Text>
             </Flex>
 
@@ -477,7 +493,7 @@ export default function ErrorsPage() {
               <div className="flex items-center justify-center py-12">
                 <Text className="text-gray-400">Loading errors...</Text>
               </div>
-            ) : filteredErrors.length === 0 ? (
+            ) : displayErrors.length === 0 ? (
               <div className="flex items-center justify-center py-12">
                 <Text className="text-gray-400">No errors found matching your filters.</Text>
               </div>
@@ -510,7 +526,7 @@ export default function ErrorsPage() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {filteredErrors.map((err) => (
+                    {displayErrors.map((err) => (
                       <TableRow key={err.id} className="border-gray-700 hover:bg-gray-750">
                         <TableCell>
                           <Badge

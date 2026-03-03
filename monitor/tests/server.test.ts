@@ -1573,6 +1573,218 @@ describe('S27 — ScrapedError events in error analytics', () => {
   });
 });
 
+// ── S22 — Server-side category filtering with correct pagination ────────────
+
+describe('S22 — Server-side category filter on /api/analytics/errors', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should filter by single category and return correct total', async () => {
+    seedSession('s1');
+    // 3 tool failures
+    seedEvent('tf1', 's1', { type: 'PostToolUseFailure', toolName: 'Edit', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('tf2', 's1', { type: 'PostToolUseFailure', toolName: 'Bash', timestamp: '2026-01-01T02:00:00Z' });
+    seedEvent('tf3', 's1', { type: 'PostToolUseFailure', toolName: 'Read', timestamp: '2026-01-01T03:00:00Z' });
+    // 1 rate limit (ScrapedError)
+    seedEvent('rl1', 's1', {
+      type: 'ScrapedError',
+      timestamp: '2026-01-01T04:00:00Z',
+      payload: { error: 'Rate limited', category: 'rate_limit', source: 'scraper' },
+    });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?category=tool_failure',
+    });
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(3);
+    expect(body.data).toHaveLength(3);
+    expect(body.data.every((e: { category: string }) => e.category === 'tool_failure')).toBe(true);
+  });
+
+  it('should filter by multiple categories (comma-separated)', async () => {
+    seedSession('s1');
+    seedEvent('tf1', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('rl1', 's1', {
+      type: 'ScrapedError',
+      timestamp: '2026-01-01T02:00:00Z',
+      payload: { error: 'Rate limited', category: 'rate_limit', source: 'scraper' },
+    });
+    seedEvent('ae1', 's1', {
+      type: 'ScrapedError',
+      timestamp: '2026-01-01T03:00:00Z',
+      payload: { error: 'Auth failed', category: 'auth_error', source: 'scraper' },
+    });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?category=tool_failure,rate_limit',
+    });
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(2);
+  });
+
+  it('should paginate correctly with category filter active', async () => {
+    seedSession('s1');
+    // Create 5 tool failures
+    for (let i = 0; i < 5; i++) {
+      seedEvent(`tf${i}`, 's1', {
+        type: 'PostToolUseFailure',
+        toolName: `Tool${i}`,
+        timestamp: `2026-01-01T0${i}:00:00Z`,
+      });
+    }
+    // Create 3 rate limits
+    for (let i = 0; i < 3; i++) {
+      seedEvent(`rl${i}`, 's1', {
+        type: 'ScrapedError',
+        timestamp: `2026-01-01T1${i}:00:00Z`,
+        payload: { error: `Rate limited ${i}`, category: 'rate_limit', source: 'scraper' },
+      });
+    }
+
+    // Page 1 of tool failures with limit=2
+    const res1 = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?category=tool_failure&limit=2&page=1',
+    });
+    const body1 = JSON.parse(res1.body);
+    expect(body1.total).toBe(5); // Total tool failures, not just this page
+    expect(body1.data).toHaveLength(2);
+
+    // Page 3 of tool failures with limit=2 (should have 1 item)
+    const res3 = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?category=tool_failure&limit=2&page=3',
+    });
+    const body3 = JSON.parse(res3.body);
+    expect(body3.total).toBe(5);
+    expect(body3.data).toHaveLength(1);
+  });
+
+  it('should return all errors when no category filter', async () => {
+    seedSession('s1');
+    seedEvent('tf1', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('rl1', 's1', {
+      type: 'ScrapedError',
+      timestamp: '2026-01-01T02:00:00Z',
+      payload: { error: 'Rate limited', category: 'rate_limit', source: 'scraper' },
+    });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/errors' });
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(2);
+  });
+});
+
+// ── S29 — ErrorsPage: tool filter and server-side sort ──────────────────────
+
+describe('S29 — Tool filter and sort on /api/analytics/errors', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('AC 5: should filter errors by tool name', async () => {
+    seedSession('s1');
+    seedEvent('e1', 's1', { type: 'PostToolUseFailure', toolName: 'Edit', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('e2', 's1', { type: 'PostToolUseFailure', toolName: 'Bash', timestamp: '2026-01-01T02:00:00Z' });
+    seedEvent('e3', 's1', { type: 'PostToolUseFailure', toolName: 'Edit', timestamp: '2026-01-01T03:00:00Z' });
+    seedEvent('e4', 's1', { type: 'PostToolUseFailure', toolName: 'Read', timestamp: '2026-01-01T04:00:00Z' });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?tool=Edit',
+    });
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(2);
+    expect(body.data.every((e: { tool: string }) => e.tool === 'Edit')).toBe(true);
+  });
+
+  it('AC 5: tool filter combines with category filter', async () => {
+    seedSession('s1');
+    seedEvent('e1', 's1', { type: 'PostToolUseFailure', toolName: 'Edit', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('e2', 's1', { type: 'PostToolUseFailure', toolName: 'Bash', timestamp: '2026-01-01T02:00:00Z' });
+    seedEvent('e3', 's1', {
+      type: 'ScrapedError',
+      toolName: 'Edit',
+      timestamp: '2026-01-01T03:00:00Z',
+      payload: { error: 'Rate limited', category: 'rate_limit', source: 'scraper' },
+    });
+
+    // Filter to tool=Edit + category=tool_failure should return only e1
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?tool=Edit&category=tool_failure',
+    });
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(1);
+    expect(body.data[0].tool).toBe('Edit');
+    expect(body.data[0].category).toBe('tool_failure');
+  });
+
+  it('should sort by category ascending', async () => {
+    seedSession('s1');
+    seedEvent('e1', 's1', {
+      type: 'ScrapedError',
+      timestamp: '2026-01-01T01:00:00Z',
+      payload: { error: 'Rate limited', category: 'rate_limit', source: 'scraper' },
+    });
+    seedEvent('e2', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T02:00:00Z' });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?sort=category&order=asc',
+    });
+    const body = JSON.parse(res.body);
+    // rate_limit > tool_failure alphabetically, so asc: rate_limit first
+    expect(body.data[0].category).toBe('rate_limit');
+    expect(body.data[1].category).toBe('tool_failure');
+  });
+
+  it('should sort by timestamp ascending', async () => {
+    seedSession('s1');
+    seedEvent('e1', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T03:00:00Z' });
+    seedEvent('e2', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('e3', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T02:00:00Z' });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors?sort=timestamp&order=asc',
+    });
+    const body = JSON.parse(res.body);
+    expect(body.data[0].timestamp).toBe('2026-01-01T01:00:00Z');
+    expect(body.data[1].timestamp).toBe('2026-01-01T02:00:00Z');
+    expect(body.data[2].timestamp).toBe('2026-01-01T03:00:00Z');
+  });
+
+  it('should default to timestamp desc sort', async () => {
+    seedSession('s1');
+    seedEvent('e1', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T01:00:00Z' });
+    seedEvent('e2', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T03:00:00Z' });
+    seedEvent('e3', 's1', { type: 'PostToolUseFailure', timestamp: '2026-01-01T02:00:00Z' });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/analytics/errors',
+    });
+    const body = JSON.parse(res.body);
+    // desc: newest first
+    expect(body.data[0].timestamp).toBe('2026-01-01T03:00:00Z');
+    expect(body.data[1].timestamp).toBe('2026-01-01T02:00:00Z');
+    expect(body.data[2].timestamp).toBe('2026-01-01T01:00:00Z');
+  });
+});
+
 // ── createServer integration (H1) ───────────────────────────────────────────
 
 describe('H1 — createServer integration', () => {

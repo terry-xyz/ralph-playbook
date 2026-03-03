@@ -283,15 +283,15 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/analytics/errors — Error data from all 3 error sources
+  // Supports server-side category, tool, sort, and pagination (S22, S29)
   fastify.get('/api/analytics/errors', async (request) => {
     const db = (fastify as any).db as Database;
     const query = request.query as Record<string, string>;
 
     const page = Math.max(1, parseInt(query.page ?? '1', 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(query.limit ?? '50', 10) || 50));
-    const offset = (page - 1) * limit;
 
-    // Query all error sources: PostToolUseFailure + Stop events with error payload
+    // SQL-level filters: base error condition + session/project/date
     const conditions: string[] = [
       "(e.type = 'PostToolUseFailure' OR e.type = 'ScrapedError' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))"
     ];
@@ -313,27 +313,24 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       conditions.push('e.timestamp <= ?');
       params.push(query.to);
     }
+    if (query.tool) {
+      conditions.push('e.tool_name = ?');
+      params.push(query.tool);
+    }
 
     const where = conditions.join(' AND ');
 
-    const countResult = db.exec(
-      `SELECT COUNT(*) FROM events e JOIN sessions s ON e.session_id = s.session_id WHERE ${where};`,
-      params
-    );
-    const total = countResult.length > 0 ? countResult[0].values[0][0] as number : 0;
-
-    const allParams = [...params, limit, offset];
+    // Fetch all matching errors (no SQL LIMIT) so category filter + pagination are correct
     const result = db.exec(
       `SELECT e.event_id, e.session_id, e.timestamp, e.type, e.tool_name, e.payload, s.project
        FROM events e
        JOIN sessions s ON e.session_id = s.session_id
        WHERE ${where}
-       ORDER BY e.timestamp DESC
-       LIMIT ? OFFSET ?;`,
-      allParams
+       ORDER BY e.timestamp DESC;`,
+      params
     );
 
-    const errors = result.length > 0 ? result[0].values.map((row: unknown[]) => {
+    let errors = result.length > 0 ? result[0].values.map((row: unknown[]) => {
       const eventType = row[3] as string;
       const payloadStr = row[5] as string || '{}';
       const payload = JSON.parse(payloadStr);
@@ -366,22 +363,48 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       return {
         id: row[0],
         sessionId: row[1],
-        timestamp: row[2],
+        timestamp: row[2] as string,
         category,
         message: typeof message === 'string' ? message : JSON.stringify(message),
         tool: toolName,
-        project: row[6],
+        project: row[6] as string,
       };
     }) : [];
 
-    // Apply category filter client-side if specified (after query)
-    const filteredErrors = query.category
-      ? errors.filter((e: { category: string }) => e.category === query.category)
-      : errors;
+    // Apply category filter server-side (S22 fix: filter before pagination)
+    if (query.category) {
+      const categories = query.category.split(',');
+      errors = errors.filter((e) => categories.includes(e.category));
+    }
+
+    // Apply sort (S29: server-side sort for correct pagination)
+    const sortField = query.sort ?? 'timestamp';
+    const sortOrder = query.order === 'asc' ? 1 : -1;
+    errors.sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'category':
+          cmp = a.category.localeCompare(b.category);
+          break;
+        case 'project':
+          cmp = a.project.localeCompare(b.project);
+          break;
+        case 'timestamp':
+        default:
+          cmp = a.timestamp.localeCompare(b.timestamp);
+          break;
+      }
+      return cmp * sortOrder;
+    });
+
+    // Paginate the fully filtered + sorted result
+    const total = errors.length;
+    const offset = (page - 1) * limit;
+    const paginatedErrors = errors.slice(offset, offset + limit);
 
     return {
-      data: filteredErrors,
-      total: query.category ? filteredErrors.length : total,
+      data: paginatedErrors,
+      total,
       page,
       limit,
     };
