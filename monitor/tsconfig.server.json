@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "dist/server",
+    "rootDir": "src",
+    "lib": ["ES2022"],
+    "jsx": "react-jsx",
+    "noEmit": false
+  },
+  "include": ["src/server/**/*", "src/shared/**/*", "src/lib/**/*"],
+  "exclude": ["node_modules", "dist", "src/client/**/*"]
+}
