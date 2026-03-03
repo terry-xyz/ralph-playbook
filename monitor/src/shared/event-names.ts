@@ -25,6 +25,7 @@ export const EVENT_DESCRIPTIONS: Record<HookEventType, string> = {
   PermissionRequest: 'When a permission decision is requested',
   SessionStart: 'When a new session begins',
   SessionEnd: 'When a session ends',
+  ScrapedError: 'Error extracted from post-session scraping',
 };
 
 /** Events that indicate session-level activity (used for summary verbosity mode). */

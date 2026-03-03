@@ -52,12 +52,13 @@ describe('A4 — Shared types and constants', () => {
       }
     });
 
-    it('should have descriptions for all 12 event types', () => {
-      expect(Object.keys(EVENT_DESCRIPTIONS)).toHaveLength(12);
+    it('should have descriptions for all event types (12 hook + 1 synthetic)', () => {
+      expect(Object.keys(EVENT_DESCRIPTIONS)).toHaveLength(13);
       for (const type of HOOK_EVENT_TYPES) {
         expect(EVENT_DESCRIPTIONS[type]).toBeDefined();
         expect(typeof EVENT_DESCRIPTIONS[type]).toBe('string');
       }
+      expect(EVENT_DESCRIPTIONS['ScrapedError']).toBeDefined();
     });
 
     it('should use correct event names (not common mistakes)', () => {

@@ -17,6 +17,7 @@ import type { Config, CostBreakdown, TokenCounts, ErrorCategory } from '@shared/
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 
 // ── Internal Types ──────────────────────────────────────────────────────────
 
@@ -651,6 +652,37 @@ function upsertMetrics(
 }
 
 /**
+ * Insert scraped errors as ScrapedError events and update session error_count.
+ */
+function persistScrapedErrors(
+  db: Database,
+  sessionId: string,
+  errors: ClassifiedError[],
+): void {
+  if (errors.length === 0) return;
+
+  for (const error of errors) {
+    const eventId = `scraped-${randomUUID()}`;
+    const timestamp = error.timestamp ?? new Date().toISOString();
+    const payload = JSON.stringify({
+      error: error.message,
+      category: error.category,
+      source: 'scraper',
+    });
+
+    db.run(`
+      INSERT OR IGNORE INTO events (event_id, session_id, timestamp, type, tool_name, payload, duration, tool_use_id)
+      VALUES (?, ?, ?, 'ScrapedError', NULL, ?, NULL, NULL);
+    `, [eventId, sessionId, timestamp, payload]);
+  }
+
+  // Increment session error_count by the number of scraped errors
+  db.run(`
+    UPDATE sessions SET error_count = COALESCE(error_count, 0) + ? WHERE session_id = ?;
+  `, [errors.length, sessionId]);
+}
+
+/**
  * Update the sessions table with extracted totals.
  */
 function updateSessionTotals(
@@ -784,6 +816,9 @@ export async function scrapeSession(
         data.model,
         data.turnCount,
       );
+
+      // Persist scraped errors as ScrapedError events (Spec 03 AC 6)
+      persistScrapedErrors(db, sessionId, data.errors);
     } catch (dbErr) {
       console.error(`[ralph-monitor] Database error during scrape for session ${sessionId}:`, dbErr);
     }

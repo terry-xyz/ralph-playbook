@@ -88,6 +88,7 @@ function hookTypeToFilename(hookType: HookEventType): string {
     PermissionRequest: 'permission-request',
     SessionStart: 'session-start',
     SessionEnd: 'session-end',
+    ScrapedError: 'scraped-error',
   };
   return map[hookType];
 }

@@ -1476,6 +1476,103 @@ describe('S12 — GET /api/analytics/errors/rate-limits', () => {
   });
 });
 
+// ── S27: ScrapedError events in error queries ────────────────────────────────
+
+describe('S27 — ScrapedError events in error analytics', () => {
+  beforeEach(async () => {
+    await createTestServer();
+    seedSession('scrape-err-sess', { project: 'proj-x', errorCount: 2 });
+  });
+
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET /api/analytics/errors should include ScrapedError events', async () => {
+    const now = new Date().toISOString();
+    seedEvent('scraped-err-1', 'scrape-err-sess', {
+      type: 'ScrapedError',
+      timestamp: now,
+      payload: { error: 'Rate limit exceeded', category: 'rate_limit', source: 'scraper' },
+    });
+    seedEvent('scraped-err-2', 'scrape-err-sess', {
+      type: 'ScrapedError',
+      timestamp: now,
+      payload: { error: 'Authentication failure', category: 'auth_error', source: 'scraper' },
+    });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/errors' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(2);
+
+    const categories = body.data.map((e: any) => e.category);
+    expect(categories).toContain('rate_limit');
+    expect(categories).toContain('auth_error');
+  });
+
+  it('ScrapedError events should use pre-classified category from payload', async () => {
+    seedEvent('scraped-err-3', 'scrape-err-sess', {
+      type: 'ScrapedError',
+      timestamp: new Date().toISOString(),
+      payload: { error: 'Billing quota reached', category: 'billing_error', source: 'scraper' },
+    });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/errors' });
+    const body = JSON.parse(res.body);
+    expect(body.data[0].category).toBe('billing_error');
+    expect(body.data[0].message).toBe('Billing quota reached');
+  });
+
+  it('GET /api/analytics/errors/trend should count ScrapedError events in buckets', async () => {
+    const base = new Date();
+    for (let i = 0; i < 3; i++) {
+      const ts = new Date(base.getTime() - i * 60000).toISOString();
+      seedEvent(`scraped-trend-${i}`, 'scrape-err-sess', {
+        type: 'ScrapedError',
+        timestamp: ts,
+        payload: { error: `Error ${i}`, category: 'server_error', source: 'scraper' },
+      });
+    }
+
+    const from = new Date(base.getTime() - 3600000).toISOString();
+    const to = new Date(base.getTime() + 60000).toISOString();
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/trend?from=${from}&to=${to}`,
+    });
+    const body = JSON.parse(res.body);
+    const totalCount = body.buckets.reduce((sum: number, b: any) => sum + b.count, 0);
+    expect(totalCount).toBe(3);
+  });
+
+  it('ScrapedError rate limit events should appear in rate-limits endpoint', async () => {
+    const now = new Date();
+    seedEvent('scraped-rl-1', 'scrape-err-sess', {
+      type: 'ScrapedError',
+      timestamp: new Date(now.getTime() - 10000).toISOString(),
+      payload: { error: 'Rate limit exceeded', category: 'rate_limit', source: 'scraper' },
+    });
+    seedEvent('scraped-rl-2', 'scrape-err-sess', {
+      type: 'ScrapedError',
+      timestamp: now.toISOString(),
+      payload: { error: 'Too many requests 429', category: 'rate_limit', source: 'scraper' },
+    });
+
+    const from = new Date(now.getTime() - 3600000).toISOString();
+    const to = new Date(now.getTime() + 60000).toISOString();
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/rate-limits?from=${from}&to=${to}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.frequency.length).toBeGreaterThan(0);
+  });
+});
+
 // ── createServer integration (H1) ───────────────────────────────────────────
 
 describe('H1 — createServer integration', () => {

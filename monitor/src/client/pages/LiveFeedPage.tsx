@@ -42,6 +42,7 @@ const EVENT_TYPE_COLORS: Record<HookEventType, string> = {
   PreCompact: 'violet',
   Notification: 'yellow',
   PermissionRequest: 'orange',
+  ScrapedError: 'rose',
 };
 
 const MAX_EVENTS = 500;

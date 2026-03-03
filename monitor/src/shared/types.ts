@@ -18,7 +18,8 @@ export type HookEventType =
   | 'Notification'
   | 'PermissionRequest'
   | 'SessionStart'
-  | 'SessionEnd';
+  | 'SessionEnd'
+  | 'ScrapedError';
 
 /** Raw event payload from a Claude Code hook (read from stdin). */
 export interface HookEventPayload {

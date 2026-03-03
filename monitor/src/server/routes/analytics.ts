@@ -293,7 +293,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
 
     // Query all error sources: PostToolUseFailure + Stop events with error payload
     const conditions: string[] = [
-      "(e.type = 'PostToolUseFailure' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))"
+      "(e.type = 'PostToolUseFailure' OR e.type = 'ScrapedError' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))"
     ];
     const params: unknown[] = [];
 
@@ -339,9 +339,11 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       const payload = JSON.parse(payloadStr);
       const toolName = row[4] as string | null;
 
-      // Categorize error using keyword matching (mirrors session-lifecycle.ts categorizeError)
+      // Categorize error: ScrapedError events have pre-classified category in payload
       let category = 'tool_failure';
-      if (eventType === 'PostToolUseFailure') {
+      if (eventType === 'ScrapedError' && payload.category) {
+        category = payload.category;
+      } else if (eventType === 'PostToolUseFailure') {
         category = 'tool_failure';
       } else {
         const lower = payloadStr.toLowerCase();
@@ -399,7 +401,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     const bucketMs = rangeMs > 7 * 86400000 ? 86400000 : rangeMs > 86400000 ? 3600000 : 600000; // day / hour / 10min
 
     // Fetch error events in range
-    const errorCondition = "(e.type = 'PostToolUseFailure' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))";
+    const errorCondition = "(e.type = 'PostToolUseFailure' OR e.type = 'ScrapedError' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))";
     const conditions = [errorCondition, 'e.timestamp >= ?', 'e.timestamp <= ?'];
     const params: unknown[] = [fromDate, toDate];
 
@@ -428,20 +430,25 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
         const bucketKey = Math.floor(ts / bucketMs) * bucketMs;
         const existing = bucketMap.get(bucketKey) ?? { count: 0, categories: {} };
 
-        // Categorize
+        // Categorize: ScrapedError events have pre-classified category in payload
         const eventType = row[1] as string;
-        const payloadStr = (row[2] as string || '').toLowerCase();
+        const payloadStr = (row[2] as string || '');
         let category = 'tool_failure';
-        if (eventType === 'PostToolUseFailure') {
+        if (eventType === 'ScrapedError') {
+          try { category = JSON.parse(payloadStr).category ?? 'tool_failure'; } catch { /* use default */ }
+        } else if (eventType === 'PostToolUseFailure') {
           category = 'tool_failure';
-        } else if (payloadStr.includes('rate limit') || payloadStr.includes('429') || payloadStr.includes('too many requests')) {
-          category = 'rate_limit';
-        } else if (payloadStr.includes('auth') || payloadStr.includes('401') || payloadStr.includes('unauthorized')) {
-          category = 'auth_error';
-        } else if (payloadStr.includes('billing') || payloadStr.includes('payment') || payloadStr.includes('quota')) {
-          category = 'billing_error';
         } else {
-          category = 'server_error';
+          const lower = payloadStr.toLowerCase();
+          if (lower.includes('rate limit') || lower.includes('429') || lower.includes('too many requests')) {
+            category = 'rate_limit';
+          } else if (lower.includes('auth') || lower.includes('401') || lower.includes('unauthorized')) {
+            category = 'auth_error';
+          } else if (lower.includes('billing') || lower.includes('payment') || lower.includes('quota')) {
+            category = 'billing_error';
+          } else {
+            category = 'server_error';
+          }
         }
 
         existing.count++;
@@ -490,9 +497,10 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
     const fromDate = query.from ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const toDate = query.to ?? now.toISOString();
 
-    // Find all rate-limit-related events
+    // Find all rate-limit-related events (including ScrapedError with rate_limit category)
     const rateLimitCondition = `(
       (e.type = 'PostToolUseFailure' AND (e.payload LIKE '%rate_limit%' OR e.payload LIKE '%429%' OR e.payload LIKE '%too many requests%'))
+      OR (e.type = 'ScrapedError' AND e.payload LIKE '%"category":"rate_limit"%')
       OR (e.type = 'Stop' AND (e.payload LIKE '%rate_limit%' OR e.payload LIKE '%429%'))
       OR (e.payload LIKE '%rate limit%')
     )`;
