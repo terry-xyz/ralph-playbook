@@ -29,7 +29,8 @@ const SCHEMA_DDL = `
     turn_count INTEGER NOT NULL DEFAULT 0,
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
-    error_count INTEGER NOT NULL DEFAULT 0
+    error_count INTEGER NOT NULL DEFAULT 0,
+    agent_name TEXT
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -117,8 +118,23 @@ export class Storage {
       this.db.exec(SCHEMA_DDL);
     }
 
+    // Schema migration: add agent_name column if missing (added in S14)
+    this.migrateSchema();
+
     // Validate FTS5 availability
     this.ftsAvailable = this.checkFts5();
+  }
+
+  /** Apply schema migrations for columns added after initial release. */
+  private migrateSchema(): void {
+    const db = this.getDb();
+    const result = db.exec("PRAGMA table_info(sessions);");
+    if (result.length > 0) {
+      const columns = result[0].values.map((row: unknown[]) => row[1] as string);
+      if (!columns.includes('agent_name')) {
+        db.run('ALTER TABLE sessions ADD COLUMN agent_name TEXT;');
+      }
+    }
   }
 
   /** Check if FTS5 is available in this sql.js build. */

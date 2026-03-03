@@ -43,7 +43,8 @@ const SCHEMA_DDL = `
     turn_count INTEGER NOT NULL DEFAULT 0,
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
-    error_count INTEGER NOT NULL DEFAULT 0
+    error_count INTEGER NOT NULL DEFAULT 0,
+    agent_name TEXT
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -211,10 +212,10 @@ describe('Integration Test 1 — Full pipeline: event ingestion to API', () => {
     const listRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     expect(listRes.statusCode).toBe(200);
     const listBody = JSON.parse(listRes.body);
-    expect(listBody.sessions).toHaveLength(1);
-    expect(listBody.sessions[0].sessionId).toBe(sessionId);
-    expect(listBody.sessions[0].project).toBe('test-project');
-    expect(listBody.sessions[0].status).toBe('running');
+    expect(listBody.data).toHaveLength(1);
+    expect(listBody.data[0].sessionId).toBe(sessionId);
+    expect(listBody.data[0].project).toBe('test-project');
+    expect(listBody.data[0].status).toBe('running');
 
     // Verify session detail via API
     const detailRes = await fastify.inject({ method: 'GET', url: `/api/sessions/${sessionId}` });
@@ -253,8 +254,8 @@ describe('Integration Test 1 — Full pipeline: event ingestion to API', () => {
     // The valid event should appear as a session
     const listRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     const listBody = JSON.parse(listRes.body);
-    expect(listBody.sessions).toHaveLength(1);
-    expect(listBody.sessions[0].sessionId).toBe(sessionId);
+    expect(listBody.data).toHaveLength(1);
+    expect(listBody.data[0].sessionId).toBe(sessionId);
   });
 
   it('should not re-ingest already processed events on second pass', async () => {
@@ -275,7 +276,7 @@ describe('Integration Test 1 — Full pipeline: event ingestion to API', () => {
     // Still only one session
     const listRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     const listBody = JSON.parse(listRes.body);
-    expect(listBody.sessions).toHaveLength(1);
+    expect(listBody.data).toHaveLength(1);
   });
 });
 

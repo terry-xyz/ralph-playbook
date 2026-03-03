@@ -29,7 +29,8 @@ const SCHEMA_DDL = `
     turn_count INTEGER NOT NULL DEFAULT 0,
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
-    error_count INTEGER NOT NULL DEFAULT 0
+    error_count INTEGER NOT NULL DEFAULT 0,
+    agent_name TEXT
   );
 
   CREATE TABLE IF NOT EXISTS metrics (

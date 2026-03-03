@@ -35,7 +35,8 @@ const SCHEMA_DDL = `
     turn_count INTEGER NOT NULL DEFAULT 0,
     inferred_phase TEXT,
     last_seen TEXT NOT NULL,
-    error_count INTEGER NOT NULL DEFAULT 0
+    error_count INTEGER NOT NULL DEFAULT 0,
+    agent_name TEXT
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -240,7 +241,7 @@ describe('H2 — GET /api/sessions', () => {
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.sessions).toEqual([]);
+    expect(body.data).toEqual([]);
     expect(body.total).toBe(0);
     expect(body.page).toBe(1);
   });
@@ -249,11 +250,11 @@ describe('H2 — GET /api/sessions', () => {
     seedSession('s1', { project: 'acme', model: 'claude-sonnet-4', status: 'running' });
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     const body = JSON.parse(res.body);
-    expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0].sessionId).toBe('s1');
-    expect(body.sessions[0].project).toBe('acme');
-    expect(body.sessions[0].model).toBe('claude-sonnet-4');
-    expect(body.sessions[0].status).toBe('running');
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s1');
+    expect(body.data[0].project).toBe('acme');
+    expect(body.data[0].model).toBe('claude-sonnet-4');
+    expect(body.data[0].status).toBe('running');
     expect(body.total).toBe(1);
   });
 
@@ -262,8 +263,8 @@ describe('H2 — GET /api/sessions', () => {
     seedSession('s2', { status: 'completed' });
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions?status=completed' });
     const body = JSON.parse(res.body);
-    expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0].sessionId).toBe('s2');
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s2');
   });
 
   it('should filter by project', async () => {
@@ -271,8 +272,8 @@ describe('H2 — GET /api/sessions', () => {
     seedSession('s2', { project: 'beta' });
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions?project=alpha' });
     const body = JSON.parse(res.body);
-    expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0].project).toBe('alpha');
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].project).toBe('alpha');
   });
 
   it('should paginate correctly', async () => {
@@ -281,7 +282,7 @@ describe('H2 — GET /api/sessions', () => {
     }
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions?page=2&limit=2' });
     const body = JSON.parse(res.body);
-    expect(body.sessions).toHaveLength(2);
+    expect(body.data).toHaveLength(2);
     expect(body.total).toBe(5);
     expect(body.page).toBe(2);
     expect(body.limit).toBe(2);
@@ -299,8 +300,8 @@ describe('H2 — GET /api/sessions', () => {
     seedSession('s3', { totalCost: 20 });
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions?sortBy=total_cost&order=asc' });
     const body = JSON.parse(res.body);
-    expect(body.sessions[0].totalCost).toBe(5);
-    expect(body.sessions[2].totalCost).toBe(20);
+    expect(body.data[0].totalCost).toBe(5);
+    expect(body.data[2].totalCost).toBe(20);
   });
 
   it('should filter by cost range', async () => {
@@ -309,8 +310,8 @@ describe('H2 — GET /api/sessions', () => {
     seedSession('s3', { totalCost: 25 });
     const res = await fastify.inject({ method: 'GET', url: '/api/sessions?minCost=10&maxCost=20' });
     const body = JSON.parse(res.body);
-    expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0].sessionId).toBe('s2');
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s2');
   });
 });
 
@@ -641,8 +642,8 @@ describe('S3 — POST /api/data/purge', () => {
     // Old data should be purged
     const sessionsRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     const sessionsBody = JSON.parse(sessionsRes.body);
-    expect(sessionsBody.sessions).toHaveLength(1);
-    expect(sessionsBody.sessions[0].sessionId).toBe('new-session');
+    expect(sessionsBody.data).toHaveLength(1);
+    expect(sessionsBody.data[0].sessionId).toBe('new-session');
   });
 
   it('should not purge data within retention period', async () => {
@@ -655,7 +656,7 @@ describe('S3 — POST /api/data/purge', () => {
 
     const sessionsRes = await fastify.inject({ method: 'GET', url: '/api/sessions' });
     const sessionsBody = JSON.parse(sessionsRes.body);
-    expect(sessionsBody.sessions).toHaveLength(1);
+    expect(sessionsBody.data).toHaveLength(1);
   });
 
   it('should purge orphaned metrics when sessions are purged', async () => {
@@ -816,6 +817,172 @@ describe('H7 — Error handling & SPA fallback', () => {
     expect(body.error).toBe('Internal server error');
     // Must NOT leak internal details
     expect(res.body).not.toContain('secret internal detail');
+  });
+});
+
+// ── S14 — Agent Name Column ──────────────────────────────────────────────────
+
+describe('S14 — Agent name in sessions', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should include agentName field in session list response', async () => {
+    db.run(`
+      INSERT INTO sessions (session_id, project, workspace, model, status, start_time, last_seen, agent_name)
+      VALUES ('s-agent', 'test-project', '/home/user/my-app', 'claude-sonnet-4', 'running', ?, ?, 'my-app');
+    `, [new Date().toISOString(), new Date().toISOString()]);
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions' });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].agentName).toBe('my-app');
+  });
+
+  it('should include agentName in session detail response', async () => {
+    db.run(`
+      INSERT INTO sessions (session_id, project, workspace, model, status, start_time, last_seen, agent_name)
+      VALUES ('s-agent-detail', 'test-project', '/work/cool-project', 'claude-sonnet-4', 'running', ?, ?, 'cool-project');
+    `, [new Date().toISOString(), new Date().toISOString()]);
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions/s-agent-detail' });
+    const body = JSON.parse(res.body);
+    expect(body.session.agentName).toBe('cool-project');
+  });
+
+  it('should handle null agentName gracefully', async () => {
+    seedSession('s-no-agent');
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions' });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].agentName).toBeNull();
+  });
+});
+
+// ── S8 — Full-Text Search on Sessions Page ───────────────────────────────────
+
+describe('S8 — GET /api/sessions?search=', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should filter sessions by search term in event payloads (Spec 11 AC 21)', async () => {
+    seedSession('s-search-1', { project: 'alpha' });
+    seedSession('s-search-2', { project: 'beta' });
+    seedEvent('e-s1-1', 's-search-1', { payload: { input: { command: 'npm test authentication' } } });
+    seedEvent('e-s2-1', 's-search-2', { payload: { input: { command: 'npm run build' } } });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions?search=authentication' });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s-search-1');
+  });
+
+  it('should combine search with other filters (Spec 11 AC 23)', async () => {
+    seedSession('s-combo-1', { project: 'alpha', status: 'running' });
+    seedSession('s-combo-2', { project: 'alpha', status: 'completed' });
+    seedEvent('e-c1-1', 's-combo-1', { payload: { message: 'keyword found here' } });
+    seedEvent('e-c2-1', 's-combo-2', { payload: { message: 'keyword found there' } });
+
+    const res = await fastify.inject({
+      method: 'GET',
+      url: '/api/sessions?search=keyword&status=running',
+    });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s-combo-1');
+  });
+
+  it('should return empty list when search matches no events (Spec 11 AC 25)', async () => {
+    seedSession('s-noresult');
+    seedEvent('e-nr-1', 's-noresult', { payload: { message: 'hello world' } });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions?search=zyxnonexistent' });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(0);
+    expect(body.total).toBe(0);
+  });
+
+  it('should return all sessions when search is empty (Spec 11 AC 25)', async () => {
+    seedSession('s-all-1');
+    seedSession('s-all-2');
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions?search=' });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(2);
+  });
+});
+
+// ── S13 — Sessions Filters Endpoint ──────────────────────────────────────────
+
+describe('S13 — GET /api/sessions/filters', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return distinct projects and models (Spec 11 AC 15)', async () => {
+    seedSession('s-f1', { project: 'alpha', model: 'claude-sonnet-4' });
+    seedSession('s-f2', { project: 'beta', model: 'claude-opus-4' });
+    seedSession('s-f3', { project: 'alpha', model: 'claude-sonnet-4' });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions/filters' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.projects).toEqual(['alpha', 'beta']);
+    expect(body.models).toEqual(['claude-opus-4', 'claude-sonnet-4']);
+  });
+
+  it('should return empty arrays when no sessions exist', async () => {
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions/filters' });
+    const body = JSON.parse(res.body);
+    expect(body.projects).toEqual([]);
+    expect(body.models).toEqual([]);
+  });
+
+  it('should exclude null and empty models', async () => {
+    // Seed a session with NULL model by inserting directly
+    const now = new Date().toISOString();
+    db.run(`
+      INSERT INTO sessions (session_id, project, workspace, model, status, start_time, last_seen, error_count)
+      VALUES ('s-nullmodel', 'test-project', '', NULL, 'running', ?, ?, 0);
+    `, [now, now]);
+    seedSession('s-realmodel', { model: 'claude-haiku-4' });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions/filters' });
+    const body = JSON.parse(res.body);
+    expect(body.models).toEqual(['claude-haiku-4']);
+  });
+});
+
+// ── Model filter on sessions list ────────────────────────────────────────────
+
+describe('S13 — Model filter on GET /api/sessions', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should filter sessions by model (Spec 11 AC 14)', async () => {
+    seedSession('s-m1', { model: 'claude-sonnet-4' });
+    seedSession('s-m2', { model: 'claude-opus-4' });
+    seedSession('s-m3', { model: 'claude-sonnet-4' });
+
+    const res = await fastify.inject({ method: 'GET', url: '/api/sessions?model=claude-opus-4' });
+    const body = JSON.parse(res.body);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].sessionId).toBe('s-m2');
   });
 });
 

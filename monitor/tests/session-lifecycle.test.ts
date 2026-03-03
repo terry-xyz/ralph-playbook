@@ -18,6 +18,7 @@ import {
   processEvent,
   inferPhase,
   deriveProject,
+  deriveAgentName,
   categorizeError,
   detectStaleSessions,
 } from '@server/session-lifecycle.js';
@@ -357,6 +358,29 @@ describe('G4 — Project derivation', () => {
 
   it('should handle empty workspace', () => {
     expect(deriveProject('')).toBe('unknown');
+  });
+});
+
+// ── S14: Agent Name Derivation ────────────────────────────────────────────────
+
+describe('S14 — Agent name derivation', () => {
+  it('should derive agent name from workspace path', () => {
+    expect(deriveAgentName('/home/user/projects/my-app')).toBe('my-app');
+    expect(deriveAgentName('C:\\Users\\user\\projects\\my-app')).toBe('my-app');
+  });
+
+  it('should handle empty workspace', () => {
+    expect(deriveAgentName('')).toBe('Agent');
+  });
+
+  it('should store agent_name when creating a session', () => {
+    const db = storage.getDb();
+    processEvent(db, makeEvent({
+      sessionId: 's-agent-test',
+      workspace: '/home/user/awesome-project',
+    }));
+    const agentName = getSessionField(db, 's-agent-test', 'agent_name');
+    expect(agentName).toBe('awesome-project');
   });
 });
 

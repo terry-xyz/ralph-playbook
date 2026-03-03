@@ -81,6 +81,7 @@ export interface Session {
   inferredPhase: SessionPhase | null;
   lastSeen: string; // ISO 8601
   errorCount: number;
+  agentName: string | null;
 }
 
 // ── Metrics Types ────────────────────────────────────────────────────────────

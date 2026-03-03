@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete. 218 tests passing across 9 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S13/S14/S15. 267 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -42,14 +42,14 @@
 
 ### Backlog — High Priority
 - [x] **S7** — Session Detail as side panel (Spec 10 ACs 1-11): Implemented as SessionDetailPanel component with sliding panel, drag-to-resize, three dismissal methods (close button, Escape, click outside), and View Full navigation
-- [ ] **S8** — Full-text search on Sessions page (Spec 11 ACs 21-26): No search UI exists
+- [x] **S8** — Full-text search on Sessions page (Spec 11 ACs 21-26): Added search bar with debounced input, server-side LIKE query on event payloads via `?search=` param on `GET /api/sessions`, combines with all filters
+- [x] **S13** — Model filter on Sessions page (Spec 11 AC 14): Added model dropdown populated from data via `GET /api/sessions/filters` endpoint, filters server-side
+- [x] **S14** — Agent name column in Sessions table (Spec 11 AC 1): Added `agentName` field to Session type, `agent_name` column to DB schema with migration, derived from workspace path in session-lifecycle, displayed as column in table
+- [x] **S15** — Live-updating duration for running sessions (Spec 11 AC 3): Added `LiveDurationCell` component with 1-second interval timer for running sessions, shows elapsed time from startTime to now
 - [ ] **S9** — Cost trend time-series visualization (Spec 12 ACs 7-12): No chart, no daily/weekly/monthly granularity
 - [ ] **S10** — Budget threshold alert banners on Costs page (Spec 12 ACs 25-30): Not implemented
 - [ ] **S11** — Error rate time-series chart (Spec 13 ACs 18-21): No chart component
 - [ ] **S12** — Rate limit sub-view on Errors page (Spec 13 ACs 22-26): Not implemented
-- [ ] **S13** — Model filter on Sessions page (Spec 11 AC 14): Missing from filter panel
-- [ ] **S14** — Agent name column in Sessions table (Spec 11 AC 1): Missing column, Session type lacks agentName field
-- [ ] **S15** — Live-updating duration for running sessions in Sessions table (Spec 11 AC 3): Shows '--' instead of live timer
 - [ ] **S16** — Custom date range picker on Costs page (Spec 12 AC 34): Only preset buttons exist
 - [ ] **S17** — Scraper not integrated into ingestion pipeline (Spec 02/03): scrapeSession() never called from ingester
 - [ ] **S18** — Ingester daemon process missing (Spec 02): No lock file, detached process, signal handling
@@ -1489,7 +1489,11 @@ Phase R (Integration & Distribution)
 - **CLI uses Node.js readline (no external CLI deps), 7-step wizard** — The setup wizard uses only built-in Node.js `readline` for interactive prompts, keeping the dependency footprint minimal while implementing a 7-step guided flow.
 - **Hook injection preserves existing hooks, prevents duplicates via marker strings** — When injecting monitoring hooks into Claude Code settings, existing hook entries are preserved unchanged. Marker strings in hook commands allow re-run detection to prevent duplicate entries.
 - **22 integration tests cover full pipeline end-to-end** — Integration tests validate the complete flow from hook event file writes through ingestion, database storage, WebSocket delivery, and REST API responses.
-- **Total: 218 tests across 9 files** — Full test suite covers all phases A through R with comprehensive coverage of the server, API, scraper, CLI, and integration layers.
+- **Total: 267 tests across 10 files** — Full test suite covers all phases A through R plus gap items S8/S13/S14/S15 with comprehensive coverage of the server, API, scraper, CLI, and integration layers.
+- **API response shape fix** — `GET /api/sessions` now returns `{ data, total, page, limit }` instead of `{ sessions, total, page, limit }` to match the `PaginatedResponse<T>` client type. This fixes a client-server type mismatch that would have caused the SessionsPage to fail at runtime.
+- **Schema migration for agent_name** — Added `Storage.migrateSchema()` that uses `PRAGMA table_info` to detect missing columns and ALTERs the table. This supports loading pre-S14 database files without data loss.
+- **Full-text search via subquery** — Sessions search uses `WHERE session_id IN (SELECT DISTINCT session_id FROM events WHERE payload LIKE ?)` to find sessions by event payload content. Combines cleanly with all other filters and pagination.
+- **Filter dropdowns populated from data** — `GET /api/sessions/filters` returns distinct projects and models from the sessions table, used by the client to populate filter dropdowns without hardcoding values (Spec 11 AC 15).
 - **API/client shape mismatches found and fixed** — 3 bugs where server response shapes diverged from client TypeScript types: (1) Analytics overview returned `errorCount` but client expected `totalErrors`, plus missing `totalSessions` and `totalTokens` fields; (2) Cost analytics returned `{breakdown, totalCost, cacheHitRate, tokensSaved}` but client expected `CostDimension[]` with `key` instead of `name`; (3) Error analytics only queried `PostToolUseFailure` events with hardcoded `tool_failure` category — expanded to include Stop events with error payloads, with proper keyword-based categorization matching session-lifecycle.ts logic.
 - **Error analytics response uses `data` field** — Changed from `{errors: [...]}` to `{data: [...]}` to match PaginatedResponse<ErrorRecord> shape expected by ErrorsPage client component.
 - **Server-side error categorization mirrors categorizeError()** — The analytics errors endpoint now applies the same keyword-matching logic (rate_limit, auth_error, billing_error, server_error) as the session-lifecycle `categorizeError` function, ensuring consistent categorization across ingestion and query paths.

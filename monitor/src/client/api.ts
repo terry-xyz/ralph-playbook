@@ -114,10 +114,20 @@ export const api = {
     limit?: number;
     status?: string;
     project?: string;
+    model?: string;
+    search?: string;
     sortBy?: string;
     order?: 'asc' | 'desc';
+    from?: string;
+    to?: string;
+    minCost?: number;
+    maxCost?: number;
   }): Promise<PaginatedResponse<Session>> {
     return request(`/api/sessions${qs(params)}`);
+  },
+
+  getSessionFilters(): Promise<{ projects: string[]; models: string[] }> {
+    return request('/api/sessions/filters');
   },
 
   getSession(id: string): Promise<Session> {

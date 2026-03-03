@@ -1,14 +1,32 @@
 /**
  * REST API — Sessions endpoints (Spec 06 H2).
- * GET /api/sessions — paginated list with filters
+ * GET /api/sessions — paginated list with filters + full-text search (Spec 11 ACs 21-26)
  * GET /api/sessions/:id — session detail with metrics
  * GET /api/sessions/:id/events — paginated event list
+ * GET /api/sessions/filters — distinct projects and models for filter dropdowns
  */
 
 import type { FastifyInstance } from 'fastify';
 import type { Database } from 'sql.js';
 
 export function registerSessionRoutes(fastify: FastifyInstance) {
+  // GET /api/sessions/filters — Distinct projects and models for filter dropdowns (Spec 11 AC 15)
+  fastify.get('/api/sessions/filters', async (request, reply) => {
+    const db = (fastify as any).db as Database;
+
+    const projectResult = db.exec('SELECT DISTINCT project FROM sessions ORDER BY project;');
+    const projects = projectResult.length > 0
+      ? projectResult[0].values.map((row: unknown[]) => row[0] as string)
+      : [];
+
+    const modelResult = db.exec('SELECT DISTINCT model FROM sessions WHERE model IS NOT NULL AND model != \'\' ORDER BY model;');
+    const models = modelResult.length > 0
+      ? modelResult[0].values.map((row: unknown[]) => row[0] as string)
+      : [];
+
+    return { projects, models };
+  });
+
   // GET /api/sessions — Session listing with filters
   fastify.get('/api/sessions', async (request, reply) => {
     const db = (fastify as any).db as Database;
@@ -23,52 +41,59 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
     const params: unknown[] = [];
 
     if (query.status) {
-      conditions.push('status = ?');
+      conditions.push('s.status = ?');
       params.push(query.status);
     }
     if (query.project) {
-      conditions.push('project = ?');
+      conditions.push('s.project = ?');
       params.push(query.project);
     }
     if (query.model) {
-      conditions.push('model = ?');
+      conditions.push('s.model = ?');
       params.push(query.model);
     }
     if (query.from) {
-      conditions.push('start_time >= ?');
+      conditions.push('s.start_time >= ?');
       params.push(query.from);
     }
     if (query.to) {
-      conditions.push('start_time <= ?');
+      conditions.push('s.start_time <= ?');
       params.push(query.to);
     }
     if (query.minCost) {
-      conditions.push('total_cost >= ?');
+      conditions.push('s.total_cost >= ?');
       params.push(parseFloat(query.minCost));
     }
     if (query.maxCost) {
-      conditions.push('total_cost <= ?');
+      conditions.push('s.total_cost <= ?');
       params.push(parseFloat(query.maxCost));
+    }
+
+    // Full-text search: find sessions with matching event payloads (Spec 11 ACs 21-26)
+    if (query.search?.trim()) {
+      const searchPattern = `%${query.search.trim()}%`;
+      conditions.push('s.session_id IN (SELECT DISTINCT session_id FROM events WHERE payload LIKE ?)');
+      params.push(searchPattern);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Sorting
-    const validSortFields = ['session_id', 'project', 'model', 'status', 'total_cost', 'start_time', 'end_time', 'turn_count', 'error_count'];
+    const validSortFields = ['session_id', 'project', 'model', 'status', 'total_cost', 'start_time', 'end_time', 'turn_count', 'error_count', 'agent_name'];
     const sortBy = validSortFields.includes(query.sortBy ?? '') ? query.sortBy : 'start_time';
     const order = query.order === 'asc' ? 'ASC' : 'DESC';
 
     // Count total
-    const countResult = db.exec(`SELECT COUNT(*) FROM sessions ${where};`, params);
+    const countResult = db.exec(`SELECT COUNT(*) FROM sessions s ${where};`, params);
     const total = countResult.length > 0 ? countResult[0].values[0][0] as number : 0;
 
     // Fetch page
     const allParams = [...params, limit, offset];
     const result = db.exec(
-      `SELECT session_id, project, workspace, model, status, start_time, end_time,
-              total_cost, token_counts, turn_count, inferred_phase, last_seen, error_count
-       FROM sessions ${where}
-       ORDER BY ${sortBy} ${order}
+      `SELECT s.session_id, s.project, s.workspace, s.model, s.status, s.start_time, s.end_time,
+              s.total_cost, s.token_counts, s.turn_count, s.inferred_phase, s.last_seen, s.error_count, s.agent_name
+       FROM sessions s ${where}
+       ORDER BY s.${sortBy} ${order}
        LIMIT ? OFFSET ?;`,
       allParams
     );
@@ -87,9 +112,10 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       inferredPhase: row[10],
       lastSeen: row[11],
       errorCount: row[12],
+      agentName: row[13],
     })) : [];
 
-    return { sessions, total, page, limit };
+    return { data: sessions, total, page, limit };
   });
 
   // GET /api/sessions/:id — Session detail
@@ -99,7 +125,7 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
 
     const result = db.exec(
       `SELECT session_id, project, workspace, model, status, start_time, end_time,
-              total_cost, token_counts, turn_count, inferred_phase, last_seen, error_count
+              total_cost, token_counts, turn_count, inferred_phase, last_seen, error_count, agent_name
        FROM sessions WHERE session_id = ?;`,
       [id]
     );
@@ -124,6 +150,7 @@ export function registerSessionRoutes(fastify: FastifyInstance) {
       inferredPhase: row[10],
       lastSeen: row[11],
       errorCount: row[12],
+      agentName: row[13],
     };
 
     // Get metrics if available

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
   Table,
@@ -23,6 +23,7 @@ import type { Session, SessionStatus } from '@shared/types';
 type SortField =
   | 'sessionId'
   | 'project'
+  | 'agentName'
   | 'model'
   | 'status'
   | 'totalCost'
@@ -30,8 +31,7 @@ type SortField =
   | 'turnCount'
   | 'errorCount'
   | 'startTime'
-  | 'endTime'
-  | 'inferredPhase';
+  | 'endTime';
 
 type SortOrder = 'asc' | 'desc';
 
@@ -53,17 +53,17 @@ interface ColumnDef {
 }
 
 const COLUMNS: ColumnDef[] = [
-  { key: 'sessionId', label: 'Session ID', sortKey: 'sessionId' },
+  { key: 'sessionId', label: 'Session ID', sortKey: 'session_id' },
   { key: 'project', label: 'Project', sortKey: 'project' },
+  { key: 'agentName', label: 'Agent Name', sortKey: 'agent_name' },
   { key: 'model', label: 'Model', sortKey: 'model' },
   { key: 'status', label: 'Status', sortKey: 'status' },
-  { key: 'totalCost', label: 'Total Cost', sortKey: 'totalCost' },
-  { key: 'duration', label: 'Duration', sortKey: 'startTime' },
-  { key: 'turnCount', label: 'Turn Count', sortKey: 'turnCount' },
-  { key: 'errorCount', label: 'Error Count', sortKey: 'errorCount' },
-  { key: 'startTime', label: 'Start Time', sortKey: 'startTime' },
-  { key: 'endTime', label: 'End Time', sortKey: 'endTime' },
-  { key: 'inferredPhase', label: 'Phase', sortKey: 'inferredPhase' },
+  { key: 'totalCost', label: 'Total Cost', sortKey: 'total_cost' },
+  { key: 'duration', label: 'Duration', sortKey: 'start_time' },
+  { key: 'turnCount', label: 'Turn Count', sortKey: 'turn_count' },
+  { key: 'errorCount', label: 'Error Count', sortKey: 'error_count' },
+  { key: 'startTime', label: 'Start Time', sortKey: 'start_time' },
+  { key: 'endTime', label: 'End Time', sortKey: 'end_time' },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,9 +72,7 @@ function formatCost(cost: number): string {
   return `$${cost.toFixed(4)}`;
 }
 
-function formatDuration(startTime: string, endTime: string | null): string {
-  if (!endTime) return '--';
-  const ms = new Date(endTime).getTime() - new Date(startTime).getTime();
+function formatElapsed(ms: number): string {
   if (ms < 0) return '--';
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -83,6 +81,12 @@ function formatDuration(startTime: string, endTime: string | null): string {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+function formatDuration(startTime: string, endTime: string | null): string {
+  if (!endTime) return '--';
+  const ms = new Date(endTime).getTime() - new Date(startTime).getTime();
+  return formatElapsed(ms);
 }
 
 function formatTimestamp(ts: string | null): string {
@@ -100,6 +104,24 @@ function formatTimestamp(ts: string | null): string {
 function truncateId(id: string, maxLen = 12): string {
   if (id.length <= maxLen) return id;
   return id.slice(0, maxLen) + '...';
+}
+
+// ── Live Duration Cell ──────────────────────────────────────────────────────
+
+function LiveDurationCell({ startTime, status }: { startTime: string; status: string }) {
+  const [elapsed, setElapsed] = useState(() =>
+    Date.now() - new Date(startTime).getTime()
+  );
+
+  useEffect(() => {
+    if (status !== 'running') return;
+    const interval = setInterval(() => {
+      setElapsed(Date.now() - new Date(startTime).getTime());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startTime, status]);
+
+  return <>{formatElapsed(elapsed)}</>;
 }
 
 // ── Sort Indicator ───────────────────────────────────────────────────────────
@@ -283,10 +305,20 @@ export default function SessionsPage() {
   // Filter state
   const [statusFilter, setStatusFilter] = useState<SessionStatus[]>([]);
   const [projectFilter, setProjectFilter] = useState('');
+  const [modelFilter, setModelFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [costMin, setCostMin] = useState<number | undefined>(undefined);
   const [costMax, setCostMax] = useState<number | undefined>(undefined);
+
+  // Search state (Spec 11 ACs 21-26)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Filter dropdown options (populated from data)
+  const [availableProjects, setAvailableProjects] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -297,13 +329,34 @@ export default function SessionsPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
+  // Fetch filter options on mount
+  useEffect(() => {
+    api.getSessionFilters().then(({ projects, models }) => {
+      setAvailableProjects(projects);
+      setAvailableModels(models);
+    }).catch(() => {
+      // Silently ignore — filter dropdowns just won't be populated
+    });
+  }, []);
+
+  // Debounce search input (Spec 11 AC 24: updates as user types)
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setSearchQuery(searchInput);
+    }, 300);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchInput]);
+
   // Fetch sessions from API
   const fetchSessions = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const apiSortBy = COLUMNS.find((c) => c.key === sortBy)?.sortKey ?? 'startTime';
+      const apiSortBy = COLUMNS.find((c) => c.key === sortBy)?.sortKey ?? 'start_time';
 
       const params: Record<string, unknown> = {
         page,
@@ -312,9 +365,9 @@ export default function SessionsPage() {
         order: sortOrder,
       };
 
-      // Add status filter (comma-separated for multi-select)
-      if (statusFilter.length > 0) {
-        params.status = statusFilter.join(',');
+      // Add status filter (first status for server-side, multi handled client-side)
+      if (statusFilter.length === 1) {
+        params.status = statusFilter[0];
       }
 
       // Add project filter
@@ -322,27 +375,32 @@ export default function SessionsPage() {
         params.project = projectFilter.trim();
       }
 
+      // Add model filter (Spec 11 AC 14)
+      if (modelFilter.trim()) {
+        params.model = modelFilter.trim();
+      }
+
+      // Add date range filters (server-side)
+      if (dateFrom) params.from = dateFrom;
+      if (dateTo) params.to = dateTo;
+
+      // Add cost range filters (server-side)
+      if (costMin !== undefined && !isNaN(costMin)) params.minCost = costMin;
+      if (costMax !== undefined && !isNaN(costMax)) params.maxCost = costMax;
+
+      // Add full-text search (Spec 11 ACs 21-26)
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim();
+      }
+
       const result: PaginatedResponse<Session> = await api.getSessions(
         params as Parameters<typeof api.getSessions>[0],
       );
 
-      // Client-side filtering for date range and cost range
-      // (in case the API doesn't support these filters natively)
+      // Client-side status filter for multi-select (server only handles single status)
       let filtered = result.data;
-
-      if (dateFrom) {
-        const fromDate = new Date(dateFrom).getTime();
-        filtered = filtered.filter((s) => new Date(s.startTime).getTime() >= fromDate);
-      }
-      if (dateTo) {
-        const toDate = new Date(dateTo).getTime() + 86400000; // end of day
-        filtered = filtered.filter((s) => new Date(s.startTime).getTime() <= toDate);
-      }
-      if (costMin !== undefined && !isNaN(costMin)) {
-        filtered = filtered.filter((s) => s.totalCost >= costMin);
-      }
-      if (costMax !== undefined && !isNaN(costMax)) {
-        filtered = filtered.filter((s) => s.totalCost <= costMax);
+      if (statusFilter.length > 1) {
+        filtered = filtered.filter((s) => statusFilter.includes(s.status));
       }
 
       setSessions(filtered);
@@ -354,7 +412,7 @@ export default function SessionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, sortBy, sortOrder, statusFilter, projectFilter, dateFrom, dateTo, costMin, costMax]);
+  }, [page, limit, sortBy, sortOrder, statusFilter, projectFilter, modelFilter, dateFrom, dateTo, costMin, costMax, searchQuery]);
 
   useEffect(() => {
     fetchSessions();
@@ -363,10 +421,11 @@ export default function SessionsPage() {
   // Reset page when filters change
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, projectFilter, dateFrom, dateTo, costMin, costMax, limit]);
+  }, [statusFilter, projectFilter, modelFilter, dateFrom, dateTo, costMin, costMax, searchQuery, limit]);
 
   // Handle column header click for sorting
   function handleSort(column: SortField) {
+    if (column === 'duration') return; // Duration is derived, not directly sortable
     if (sortBy === column) {
       setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
     } else {
@@ -384,19 +443,24 @@ export default function SessionsPage() {
   function clearFilters() {
     setStatusFilter([]);
     setProjectFilter('');
+    setModelFilter('');
     setDateFrom('');
     setDateTo('');
     setCostMin(undefined);
     setCostMax(undefined);
+    setSearchInput('');
+    setSearchQuery('');
   }
 
   const hasActiveFilters =
     statusFilter.length > 0 ||
     projectFilter.trim() !== '' ||
+    modelFilter.trim() !== '' ||
     dateFrom !== '' ||
     dateTo !== '' ||
     costMin !== undefined ||
-    costMax !== undefined;
+    costMax !== undefined ||
+    searchQuery.trim() !== '';
 
   return (
     <div className="space-y-4">
@@ -423,25 +487,62 @@ export default function SessionsPage() {
         </div>
       </div>
 
+      {/* Search Bar (Spec 11 ACs 21-26) */}
+      <div className="relative">
+        <TextInput
+          placeholder="Search sessions by prompt text, tool inputs, responses..."
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          className="bg-gray-800"
+        />
+        {searchInput && (
+          <button
+            onClick={() => { setSearchInput(''); setSearchQuery(''); }}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 text-sm"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
       {/* Filters Panel */}
       {filtersOpen && (
         <Card className="bg-gray-800 ring-gray-700">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             {/* Status multi-select */}
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1.5">Status</label>
               <StatusMultiSelect selected={statusFilter} onChange={setStatusFilter} />
             </div>
 
-            {/* Project filter */}
+            {/* Project filter (Spec 11 AC 15: populated from data) */}
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1.5">Project</label>
-              <TextInput
-                placeholder="Filter by project..."
+              <Select
                 value={projectFilter}
-                onChange={(e) => setProjectFilter(e.target.value)}
+                onValueChange={setProjectFilter}
+                placeholder="All Projects"
                 className="bg-gray-900"
-              />
+              >
+                {availableProjects.map((p) => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
+              </Select>
+            </div>
+
+            {/* Model filter (Spec 11 AC 14: populated from data) */}
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1.5">Model</label>
+              <Select
+                value={modelFilter}
+                onValueChange={setModelFilter}
+                placeholder="All Models"
+                className="bg-gray-900"
+              >
+                {availableModels.map((m) => (
+                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                ))}
+              </Select>
             </div>
 
             {/* Date range */}
@@ -575,6 +676,11 @@ export default function SessionsPage() {
                       {session.project || '--'}
                     </TableCell>
 
+                    {/* Agent Name (Spec 11 AC 1) */}
+                    <TableCell className="text-gray-200 text-sm whitespace-nowrap max-w-[160px] truncate">
+                      {session.agentName || '--'}
+                    </TableCell>
+
                     {/* Model */}
                     <TableCell className="text-gray-300 text-sm whitespace-nowrap">
                       {session.model || '--'}
@@ -592,9 +698,13 @@ export default function SessionsPage() {
                       {formatCost(session.totalCost)}
                     </TableCell>
 
-                    {/* Duration */}
+                    {/* Duration (Spec 11 AC 3: live-updating for running sessions) */}
                     <TableCell className="text-gray-300 text-sm whitespace-nowrap">
-                      {formatDuration(session.startTime, session.endTime)}
+                      {session.status === 'running' ? (
+                        <LiveDurationCell startTime={session.startTime} status={session.status} />
+                      ) : (
+                        formatDuration(session.startTime, session.endTime)
+                      )}
                     </TableCell>
 
                     {/* Turn Count */}
@@ -617,11 +727,6 @@ export default function SessionsPage() {
                     {/* End Time */}
                     <TableCell className="text-gray-400 text-xs whitespace-nowrap">
                       {formatTimestamp(session.endTime)}
-                    </TableCell>
-
-                    {/* Phase */}
-                    <TableCell className="text-gray-300 text-xs whitespace-nowrap">
-                      {session.inferredPhase || '--'}
                     </TableCell>
                   </TableRow>
                 ))

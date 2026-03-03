@@ -99,6 +99,13 @@ export function deriveProject(workspace: string): string {
   return parts[parts.length - 1] || 'unknown';
 }
 
+/** Derive a human-readable agent name from workspace path. */
+export function deriveAgentName(workspace: string): string {
+  if (!workspace) return 'Agent';
+  const parts = workspace.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts[parts.length - 1] || 'Agent';
+}
+
 // ── Error Categorization (G6) ────────────────────────────────────────────────
 
 /** Categorize an error event into one of 5 categories. */
@@ -155,9 +162,10 @@ export function processEvent(db: Database, event: EventRecord): void {
 
   if (existing.length === 0 || existing[0].values.length === 0) {
     // Auto-create session on first event (Spec 05 AC 1)
+    const agentName = deriveAgentName(event.workspace);
     db.run(`
-      INSERT INTO sessions (session_id, project, workspace, status, start_time, last_seen, model)
-      VALUES (?, ?, ?, 'running', ?, ?, ?);
+      INSERT INTO sessions (session_id, project, workspace, status, start_time, last_seen, model, agent_name)
+      VALUES (?, ?, ?, 'running', ?, ?, ?, ?);
     `, [
       event.sessionId,
       event.project,
@@ -165,6 +173,7 @@ export function processEvent(db: Database, event: EventRecord): void {
       now,
       now,
       (event.payload.model as string) ?? null,
+      agentName,
     ]);
   } else {
     const currentStatus = existing[0].values[0][1] as SessionStatus;
