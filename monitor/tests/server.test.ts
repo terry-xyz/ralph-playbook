@@ -1246,6 +1246,236 @@ describe('S10 — GET /api/analytics/budget-alerts', () => {
   });
 });
 
+// ── S11: Error Rate Time-Series (Spec 13 ACs 18-21) ────────────────────────
+
+describe('S11 — GET /api/analytics/errors/trend', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return trend data with buckets array', async () => {
+    const now = new Date();
+    seedSession('s-err-t1', { project: 'proj1', startTime: now.toISOString() });
+    seedEvent('e-err-1', 's-err-t1', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: 'test error' },
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/trend?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toHaveProperty('buckets');
+    expect(body).toHaveProperty('overlays');
+    expect(body).toHaveProperty('bucketMs');
+    expect(Array.isArray(body.buckets)).toBe(true);
+  });
+
+  it('should categorize errors in trend buckets', async () => {
+    const now = new Date();
+    seedSession('s-err-t2', { project: 'proj1', startTime: now.toISOString() });
+    seedEvent('e-cat-1', 's-err-t2', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: 'tool failed' },
+    });
+    seedEvent('e-cat-2', 's-err-t2', {
+      type: 'Stop',
+      timestamp: now.toISOString(),
+      payload: { error: 'rate limit hit', is_error: true },
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/trend?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.buckets.length).toBeGreaterThanOrEqual(1);
+    const bucket = body.buckets[0];
+    expect(bucket.categories).toBeDefined();
+    expect(bucket.count).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should return empty buckets when no errors', async () => {
+    const now = new Date();
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/trend?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.buckets).toEqual([]);
+  });
+
+  it('should include session start/stop overlays', async () => {
+    const now = new Date();
+    seedSession('s-overlay', { project: 'proj1', startTime: now.toISOString() });
+    seedEvent('e-start', 's-overlay', {
+      type: 'SessionStart',
+      timestamp: now.toISOString(),
+    });
+    seedEvent('e-stop', 's-overlay', {
+      type: 'Stop',
+      timestamp: now.toISOString(),
+      payload: {},
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/trend?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.overlays.length).toBeGreaterThanOrEqual(1);
+    expect(body.overlays[0]).toHaveProperty('date');
+    expect(body.overlays[0]).toHaveProperty('type');
+    expect(body.overlays[0]).toHaveProperty('label');
+  });
+
+  it('should filter by session when provided', async () => {
+    const now = new Date();
+    seedSession('s-filter-1', { project: 'proj1', startTime: now.toISOString() });
+    seedSession('s-filter-2', { project: 'proj2', startTime: now.toISOString() });
+    seedEvent('e-f1', 's-filter-1', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: 'err1' },
+    });
+    seedEvent('e-f2', 's-filter-2', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: 'err2' },
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/trend?from=${dayAgo.toISOString()}&to=${now.toISOString()}&session=s-filter-1`,
+    });
+    const body = JSON.parse(res.body);
+    const totalCount = body.buckets.reduce((sum: number, b: { count: number }) => sum + b.count, 0);
+    expect(totalCount).toBe(1);
+  });
+});
+
+// ── S12: Rate Limit Sub-View (Spec 13 ACs 22-26) ───────────────────────────
+
+describe('S12 — GET /api/analytics/errors/rate-limits', () => {
+  beforeEach(async () => { await createTestServer(); });
+  afterEach(async () => {
+    await fastify.close();
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should return rate limit tracking data structure', async () => {
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/errors/rate-limits' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toHaveProperty('frequency');
+    expect(body).toHaveProperty('byModel');
+    expect(body).toHaveProperty('cooldowns');
+    expect(Array.isArray(body.frequency)).toBe(true);
+    expect(Array.isArray(body.byModel)).toBe(true);
+    expect(Array.isArray(body.cooldowns)).toBe(true);
+  });
+
+  it('should return empty arrays when no rate limit events', async () => {
+    const res = await fastify.inject({ method: 'GET', url: '/api/analytics/errors/rate-limits' });
+    const body = JSON.parse(res.body);
+    expect(body.frequency).toEqual([]);
+    expect(body.byModel).toEqual([]);
+    expect(body.cooldowns).toEqual([]);
+  });
+
+  it('should count rate limit events by hour', async () => {
+    const now = new Date();
+    seedSession('s-rl1', { model: 'claude-sonnet-4', startTime: now.toISOString() });
+    seedEvent('e-rl1', 's-rl1', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: 'rate_limit exceeded' },
+    });
+    seedEvent('e-rl2', 's-rl1', {
+      type: 'PostToolUseFailure',
+      timestamp: new Date(now.getTime() - 60000).toISOString(),
+      payload: { error: 'rate_limit hit 429' },
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/rate-limits?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.frequency.length).toBeGreaterThanOrEqual(1);
+    const totalCount = body.frequency.reduce((s: number, f: { count: number }) => s + f.count, 0);
+    expect(totalCount).toBe(2);
+  });
+
+  it('should attribute rate limits to models', async () => {
+    const now = new Date();
+    seedSession('s-rl-m1', { model: 'claude-sonnet-4', startTime: now.toISOString() });
+    seedSession('s-rl-m2', { model: 'claude-opus-4', startTime: now.toISOString() });
+    seedEvent('e-rl-m1', 's-rl-m1', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: '429 rate_limit' },
+    });
+    seedEvent('e-rl-m2', 's-rl-m2', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: '429 rate_limit' },
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/rate-limits?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.byModel.length).toBe(2);
+    expect(body.byModel.some((m: { model: string }) => m.model === 'claude-sonnet-4')).toBe(true);
+    expect(body.byModel.some((m: { model: string }) => m.model === 'claude-opus-4')).toBe(true);
+  });
+
+  it('should detect cooldown patterns between rate limit events', async () => {
+    const now = new Date();
+    seedSession('s-cd', { model: 'claude-sonnet-4', startTime: now.toISOString() });
+
+    // Two rate limit events 30 seconds apart (within cooldown detection range 5s-5min)
+    seedEvent('e-cd1', 's-cd', {
+      type: 'PostToolUseFailure',
+      timestamp: new Date(now.getTime() - 30000).toISOString(),
+      payload: { error: 'rate_limit' },
+    });
+    seedEvent('e-cd2', 's-cd', {
+      type: 'PostToolUseFailure',
+      timestamp: now.toISOString(),
+      payload: { error: 'rate_limit' },
+    });
+
+    const dayAgo = new Date(now.getTime() - 86400000);
+    const res = await fastify.inject({
+      method: 'GET',
+      url: `/api/analytics/errors/rate-limits?from=${dayAgo.toISOString()}&to=${now.toISOString()}`,
+    });
+    const body = JSON.parse(res.body);
+    expect(body.cooldowns.length).toBeGreaterThanOrEqual(1);
+    expect(body.cooldowns[0]).toHaveProperty('durationMs');
+    expect(body.cooldowns[0]).toHaveProperty('model');
+    expect(body.cooldowns[0].durationMs).toBeGreaterThanOrEqual(5000);
+  });
+});
+
 // ── createServer integration (H1) ───────────────────────────────────────────
 
 describe('H1 — createServer integration', () => {

@@ -120,6 +120,41 @@ export interface BudgetAlertsResponse {
   alerts: BudgetAlert[];
 }
 
+export interface ErrorTrendBucket {
+  date: string;
+  count: number;
+  categories: Record<string, number>;
+}
+
+export interface ErrorTrendResponse {
+  buckets: ErrorTrendBucket[];
+  overlays: Array<{ date: string; type: string; label: string }>;
+  bucketMs: number;
+}
+
+export interface RateLimitFrequency {
+  date: string;
+  count: number;
+}
+
+export interface RateLimitByModel {
+  model: string;
+  count: number;
+}
+
+export interface RateLimitCooldown {
+  start: string;
+  end: string;
+  durationMs: number;
+  model: string;
+}
+
+export interface RateLimitResponse {
+  frequency: RateLimitFrequency[];
+  byModel: RateLimitByModel[];
+  cooldowns: RateLimitCooldown[];
+}
+
 export interface SearchResult {
   type: 'session' | 'event' | 'error';
   id: string;
@@ -196,6 +231,22 @@ export const api = {
     project?: string;
   }): Promise<PaginatedResponse<ErrorRecord>> {
     return request(`/api/analytics/errors${qs(params)}`);
+  },
+
+  getAnalyticsErrorsTrend(params?: {
+    from?: string;
+    to?: string;
+    session?: string;
+    category?: string;
+  }): Promise<ErrorTrendResponse> {
+    return request(`/api/analytics/errors/trend${qs(params)}`);
+  },
+
+  getAnalyticsRateLimits(params?: {
+    from?: string;
+    to?: string;
+  }): Promise<RateLimitResponse> {
+    return request(`/api/analytics/errors/rate-limits${qs(params)}`);
   },
 
   getConfig(): Promise<Config> {

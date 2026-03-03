@@ -384,4 +384,170 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance) {
       limit,
     };
   });
+
+  // GET /api/analytics/errors/trend — Error rate time-series (Spec 13 ACs 18-21)
+  fastify.get('/api/analytics/errors/trend', async (request) => {
+    const db = (fastify as any).db as Database;
+    const query = request.query as Record<string, string>;
+
+    const now = new Date();
+    const fromDate = query.from ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const toDate = query.to ?? now.toISOString();
+
+    // Determine bucket size based on time range
+    const rangeMs = new Date(toDate).getTime() - new Date(fromDate).getTime();
+    const bucketMs = rangeMs > 7 * 86400000 ? 86400000 : rangeMs > 86400000 ? 3600000 : 600000; // day / hour / 10min
+
+    // Fetch error events in range
+    const errorCondition = "(e.type = 'PostToolUseFailure' OR (e.type = 'Stop' AND (e.payload LIKE '%\"error\"%' OR e.payload LIKE '%\"is_error\"%')))";
+    const conditions = [errorCondition, 'e.timestamp >= ?', 'e.timestamp <= ?'];
+    const params: unknown[] = [fromDate, toDate];
+
+    // Apply optional filters matching the error log table filters
+    if (query.category || query.session || query.project) {
+      // We need to join sessions for project filtering
+    }
+    if (query.session) {
+      conditions.push('e.session_id = ?');
+      params.push(query.session);
+    }
+
+    const result = db.exec(
+      `SELECT e.timestamp, e.type, e.payload
+       FROM events e
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY e.timestamp ASC;`,
+      params
+    );
+
+    // Bucket the errors
+    const bucketMap = new Map<number, { count: number; categories: Record<string, number> }>();
+    if (result.length > 0) {
+      for (const row of result[0].values) {
+        const ts = new Date(row[0] as string).getTime();
+        const bucketKey = Math.floor(ts / bucketMs) * bucketMs;
+        const existing = bucketMap.get(bucketKey) ?? { count: 0, categories: {} };
+
+        // Categorize
+        const eventType = row[1] as string;
+        const payloadStr = (row[2] as string || '').toLowerCase();
+        let category = 'tool_failure';
+        if (eventType === 'PostToolUseFailure') {
+          category = 'tool_failure';
+        } else if (payloadStr.includes('rate limit') || payloadStr.includes('429') || payloadStr.includes('too many requests')) {
+          category = 'rate_limit';
+        } else if (payloadStr.includes('auth') || payloadStr.includes('401') || payloadStr.includes('unauthorized')) {
+          category = 'auth_error';
+        } else if (payloadStr.includes('billing') || payloadStr.includes('payment') || payloadStr.includes('quota')) {
+          category = 'billing_error';
+        } else {
+          category = 'server_error';
+        }
+
+        existing.count++;
+        existing.categories[category] = (existing.categories[category] ?? 0) + 1;
+        bucketMap.set(bucketKey, existing);
+      }
+    }
+
+    const buckets = Array.from(bucketMap.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([ts, data]) => ({
+        date: new Date(ts).toISOString(),
+        count: data.count,
+        categories: data.categories,
+      }));
+
+    // Overlays: session starts/stops and rate limit bursts in the time range
+    const overlayResult = db.exec(
+      `SELECT timestamp, type FROM events
+       WHERE type IN ('SessionStart', 'SessionEnd', 'Stop') AND timestamp >= ? AND timestamp <= ?
+       ORDER BY timestamp ASC;`,
+      [fromDate, toDate]
+    );
+
+    const overlays: Array<{ date: string; type: string; label: string }> = [];
+    if (overlayResult.length > 0) {
+      for (const row of overlayResult[0].values) {
+        const type = row[1] as string;
+        overlays.push({
+          date: row[0] as string,
+          type: type === 'SessionStart' ? 'session_start' : type === 'SessionEnd' ? 'session_stop' : 'session_stop',
+          label: type === 'SessionStart' ? 'Session started' : 'Session ended',
+        });
+      }
+    }
+
+    return { buckets, overlays, bucketMs };
+  });
+
+  // GET /api/analytics/errors/rate-limits — Rate limit tracking (Spec 13 ACs 22-26)
+  fastify.get('/api/analytics/errors/rate-limits', async (request) => {
+    const db = (fastify as any).db as Database;
+    const query = request.query as Record<string, string>;
+
+    const now = new Date();
+    const fromDate = query.from ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const toDate = query.to ?? now.toISOString();
+
+    // Find all rate-limit-related events
+    const rateLimitCondition = `(
+      (e.type = 'PostToolUseFailure' AND (e.payload LIKE '%rate_limit%' OR e.payload LIKE '%429%' OR e.payload LIKE '%too many requests%'))
+      OR (e.type = 'Stop' AND (e.payload LIKE '%rate_limit%' OR e.payload LIKE '%429%'))
+      OR (e.payload LIKE '%rate limit%')
+    )`;
+
+    const result = db.exec(
+      `SELECT e.timestamp, e.session_id, e.payload, s.model
+       FROM events e
+       JOIN sessions s ON e.session_id = s.session_id
+       WHERE ${rateLimitCondition} AND e.timestamp >= ? AND e.timestamp <= ?
+       ORDER BY e.timestamp ASC;`,
+      [fromDate, toDate]
+    );
+
+    // Frequency: bucket by hour
+    const hourBuckets = new Map<number, number>();
+    const modelCounts = new Map<string, number>();
+    const rawEvents: Array<{ ts: number; model: string }> = [];
+
+    if (result.length > 0) {
+      for (const row of result[0].values) {
+        const ts = new Date(row[0] as string).getTime();
+        const hourKey = Math.floor(ts / 3600000) * 3600000;
+        hourBuckets.set(hourKey, (hourBuckets.get(hourKey) ?? 0) + 1);
+
+        const model = (row[3] as string) ?? 'unknown';
+        modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1);
+        rawEvents.push({ ts, model });
+      }
+    }
+
+    const frequency = Array.from(hourBuckets.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([ts, count]) => ({ date: new Date(ts).toISOString(), count }));
+
+    const byModel = Array.from(modelCounts.entries())
+      .sort(([, a], [, b]) => b - a)
+      .map(([model, count]) => ({ model, count }));
+
+    // Cooldown patterns: detect gaps between consecutive rate limit events
+    const cooldowns: Array<{ start: string; end: string; durationMs: number; model: string }> = [];
+    if (rawEvents.length >= 2) {
+      for (let i = 1; i < rawEvents.length; i++) {
+        const gap = rawEvents[i].ts - rawEvents[i - 1].ts;
+        // If gap is between 5s and 5min, it's likely a cooldown period
+        if (gap >= 5000 && gap <= 300000) {
+          cooldowns.push({
+            start: new Date(rawEvents[i - 1].ts).toISOString(),
+            end: new Date(rawEvents[i].ts).toISOString(),
+            durationMs: gap,
+            model: rawEvents[i - 1].model,
+          });
+        }
+      }
+    }
+
+    return { frequency, byModel, cooldowns };
+  });
 }

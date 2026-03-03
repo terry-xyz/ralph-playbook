@@ -1,6 +1,6 @@
 # Implementation Plan — Ralph Monitor
 
-> **Status**: All phases A–R complete + S8/S9/S10/S13/S14/S15/S16. 280 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
+> **Status**: All phases A–R complete + S8/S9/S10/S11/S12/S13/S14/S15/S16. 290 tests passing across 10 test files. TypeScript compiles cleanly. Vite build succeeds.
 >
 > **Scope**: Phase 1 (Core Dashboard). All code lives in `/monitor`. Nothing outside that directory is touched.
 >
@@ -49,8 +49,8 @@
 - [x] **S9** — Cost trend time-series visualization (Spec 12 ACs 7-12): Added `GET /api/analytics/costs/trend` endpoint with daily/weekly/monthly granularity and previous period comparison; AreaChart component in CostsPage with granularity selector; 7 backend tests
 - [x] **S10** — Budget threshold alert banners on Costs page (Spec 12 ACs 25-30): Added `GET /api/analytics/budget-alerts` endpoint checking per-session and per-day limits from config; persistent amber alert banners on CostsPage; 6 backend tests
 - [x] **S16** — Custom date range picker on Costs page (Spec 12 AC 34): Added custom date range option with two date inputs alongside preset buttons; also added "agent name" dimension
-- [ ] **S11** — Error rate time-series chart (Spec 13 ACs 18-21): No chart component
-- [ ] **S12** — Rate limit sub-view on Errors page (Spec 13 ACs 22-26): Not implemented
+- [x] **S11** — Error rate time-series chart (Spec 13 ACs 18-21): Added `GET /api/analytics/errors/trend` endpoint with adaptive bucket sizing, stacked AreaChart by error category, session start/stop overlays, filter support; 5 backend tests
+- [x] **S12** — Rate limit sub-view on Errors page (Spec 13 ACs 22-26): Added `GET /api/analytics/errors/rate-limits` endpoint with frequency, model attribution, and cooldown pattern detection; toggle between Error Log and Rate Limits views; AreaChart frequency, BarChart by model, cooldown table; 5 backend tests
 - [ ] **S17** — Scraper not integrated into ingestion pipeline (Spec 02/03): scrapeSession() never called from ingester
 - [ ] **S18** — Ingester daemon process missing (Spec 02): No lock file, detached process, signal handling
 - [ ] **S19** — Project collision disambiguation (Spec 01 AC 23, Spec 05 AC 7): No hash-based disambiguation
@@ -1489,7 +1489,7 @@ Phase R (Integration & Distribution)
 - **CLI uses Node.js readline (no external CLI deps), 7-step wizard** — The setup wizard uses only built-in Node.js `readline` for interactive prompts, keeping the dependency footprint minimal while implementing a 7-step guided flow.
 - **Hook injection preserves existing hooks, prevents duplicates via marker strings** — When injecting monitoring hooks into Claude Code settings, existing hook entries are preserved unchanged. Marker strings in hook commands allow re-run detection to prevent duplicate entries.
 - **22 integration tests cover full pipeline end-to-end** — Integration tests validate the complete flow from hook event file writes through ingestion, database storage, WebSocket delivery, and REST API responses.
-- **Total: 280 tests across 10 files** — Full test suite covers all phases A through R plus gap items S8/S9/S10/S13/S14/S15/S16 with comprehensive coverage of the server, API, scraper, CLI, and integration layers.
+- **Total: 290 tests across 10 files** — Full test suite covers all phases A through R plus gap items S8/S9/S10/S11/S12/S13/S14/S15/S16 with comprehensive coverage of the server, API, scraper, CLI, and integration layers.
 - **API response shape fix** — `GET /api/sessions` now returns `{ data, total, page, limit }` instead of `{ sessions, total, page, limit }` to match the `PaginatedResponse<T>` client type. This fixes a client-server type mismatch that would have caused the SessionsPage to fail at runtime.
 - **Schema migration for agent_name** — Added `Storage.migrateSchema()` that uses `PRAGMA table_info` to detect missing columns and ALTERs the table. This supports loading pre-S14 database files without data loss.
 - **Full-text search via subquery** — Sessions search uses `WHERE session_id IN (SELECT DISTINCT session_id FROM events WHERE payload LIKE ?)` to find sessions by event payload content. Combines cleanly with all other filters and pagination.
@@ -1502,6 +1502,9 @@ Phase R (Integration & Distribution)
 - **Cost trend endpoint design** — `GET /api/analytics/costs/trend` accepts `granularity` (daily/weekly/monthly), `from`, `to` params. Returns `{current, previous, granularity}` where previous period is the same-duration window immediately before the current period, enabling side-by-side comparison.
 - **Budget alerts endpoint design** — `GET /api/analytics/budget-alerts` reads `config.alerts.perSessionCostLimit` and `config.alerts.perDayCostLimit`, queries sessions table, and returns `{alerts: [{type, limit, actual, sessionId?}]}`. Separate endpoint keeps the concern isolated from other analytics.
 - **Costs page dimension='agent' support** — The cost-by-dimension endpoint now supports `dimension=agent` which groups by `agent_name` column, enabling agent-level cost attribution (Spec 12 AC 3).
+- **Error trend adaptive bucketing** — `GET /api/analytics/errors/trend` auto-selects bucket size: 10min for <1day, 1hr for 1-7days, 1day for >7days. Categories are counted per bucket for stacked visualization.
+- **Rate limit cooldown detection heuristic** — Gaps between consecutive rate limit events in 5s-5min range are classified as cooldown periods. This is a heuristic that works well for typical API rate limit patterns.
+- **View toggle preserves filter state** — Switching between Error Log and Rate Limits sub-views on ErrorsPage preserves all filter state (S12 AC 26), since both views share the same component state.
 
 ---
 
